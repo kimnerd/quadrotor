@@ -177,13 +177,17 @@ class Quadrotor:
         forces = np.clip(forces, 0.0, self.max_force)
         return forces
 
-    def step(self) -> tuple[np.ndarray, float]:
+    def step(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """Advance the simulation and report attitude error.
 
         Returns
         -------
         forces:
             Array of rotor forces applied this step.
+        R:
+            Current rotation matrix after the update.
+        R_ref:
+            Reference rotation matrix computed for this step.
         angle_error:
             Magnitude of the rotation between the current orientation and the
             reference orientation in radians.
@@ -221,7 +225,7 @@ class Quadrotor:
             np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
         )
 
-        return forces, float(angle_error)
+        return forces, self.R.copy(), R_ref, float(angle_error)
 
 
 def simulate(
@@ -249,6 +253,10 @@ def simulate(
         Array of rotor forces for each step.
     attitude_errors:
         Orientation tracking error (radians) for every step.
+    rotations:
+        Rotation matrix of the vehicle at each step.
+    rotation_refs:
+        Reference rotation matrix tracked at each step.
     """
 
     quad = Quadrotor()
@@ -260,15 +268,21 @@ def simulate(
     positions = []
     forces = []
     attitude_errors = []
+    rotations = []
+    rotation_refs = []
     for _ in range(steps):
-        f, err = quad.step()
+        f, R, R_ref, err = quad.step()
         positions.append(quad.x.copy())
         forces.append(f)
+        rotations.append(R)
+        rotation_refs.append(R_ref)
         attitude_errors.append(err)
     return (
         np.array(positions),
         np.array(forces),
         np.array(attitude_errors),
+        np.array(rotations),
+        np.array(rotation_refs),
     )
 
 
@@ -280,7 +294,7 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces, attitude_errors = simulate(200)
+    positions, forces, attitude_errors, rotations, rotation_refs = simulate(200)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
@@ -292,8 +306,16 @@ if __name__ == "__main__":
     plt.legend()
     plt.savefig("trajectory.png")
 
-    for i, (pos, f, err) in enumerate(
-        zip(positions[:5], forces[:5], attitude_errors[:5])
+    for i, (pos, f, err, R, R_ref) in enumerate(
+        zip(
+            positions[:5],
+            forces[:5],
+            attitude_errors[:5],
+            rotations[:5],
+            rotation_refs[:5],
+        )
     ):
-        print(f"Step {i}: pos={pos}, forces={f}, angle_error={err}")
+        print(
+            f"Step {i}: pos={pos}, forces={f}, R={R}, R_ref={R_ref}, angle_error={err}"
+        )
 
