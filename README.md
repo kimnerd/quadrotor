@@ -20,6 +20,10 @@ Execute the main script to simulate the quadrotor for 200 steps, print a few sam
 python simulation.py
 ```
 
+The simulation now computes a reference attitude `R_ref` on each step so the
+vehicle tilts toward the target position.  This allows the quadrotor to move in
+the horizontal `x` and `y` directions in addition to holding altitude.
+
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
 
