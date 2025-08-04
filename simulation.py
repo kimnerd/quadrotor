@@ -63,10 +63,6 @@ class Quadrotor:
         self.c_t = 0.01
         self.g = np.array([0.0, 0.0, -9.81])
 
-        # Tunable PID gains
-        self.kx_p, self.kx_d, self.kx_i = 2.0, 0.8, 0.2
-        self.kR_p, self.kR_d, self.kR_i = 4.0, 0.2, 0.05
-
         # Rotor force limits (Newtons)
         self.max_force = 20.0
 
@@ -76,55 +72,38 @@ class Quadrotor:
         self.R = np.eye(3)
         self.omega = np.zeros(3)
 
-        # Integral errors for PID control
-        self.x_int = np.zeros(3)
-        self.R_int = np.zeros(3)
+        # Previous values required for the discrete-time control law
+        self.fx_prev = self.x.copy()
+        self.fR_prev = self.R.copy()
 
-    def f_x(self, x, v, x_ref):
-        """PID controller for translational dynamics returning acceleration."""
-        k_p, k_d, k_i = self.kx_p, self.kx_d, self.kx_i
-        error = x_ref - x
-        self.x_int += error * self.dt
-        # simple anti-windup to keep the integral term bounded
-        self.x_int = np.clip(self.x_int, -0.5, 0.5)
-        return k_p * error - k_d * v + k_i * self.x_int
+    def f_x(self, x, x_ref):
+        """Correction function for position (placeholder)."""
+        return x_ref
 
-    def f_R(self, R, omega, R_ref):
-        """PID controller for rotational dynamics returning torque."""
-        k_p, k_d, k_i = self.kR_p, self.kR_d, self.kR_i
-        e_R_mat = 0.5 * (R_ref.T @ R - R.T @ R_ref)
-        e_R = vee(e_R_mat)
-        self.R_int += e_R * self.dt
-        self.R_int = np.clip(self.R_int, -0.5, 0.5)
-        return -k_p * e_R - k_d * omega - k_i * self.R_int
+    def f_R(self, R, R_ref):
+        """Correction function for rotation (placeholder)."""
+        return R_ref
 
-    def thrust_and_torque(self, x_ref, R_ref=None, auto_ref=True):
-        """Return thrust and torque for given references.
+    def thrust_and_torque(self, x_ref, R_ref):
+        """Return thrust and torque using the structured control law."""
 
-        If ``auto_ref`` is True, ``R_ref`` is ignored and a reference
-        attitude is computed from the desired acceleration. Otherwise the
-        provided ``R_ref`` is used (or identity if ``None``).
-        """
-
-        # Compute thrust command
-        a_cmd = self.f_x(self.x, self.v, x_ref)
-        if auto_ref:
-            R_ref = make_R_ref_from_acc(a_cmd, self.g)
-        elif R_ref is None:
-            R_ref = np.eye(3)
-        vec = self.m * (a_cmd - self.g)
-        if auto_ref:
-            ez = R_ref @ np.array([0, 0, 1])
-        else:
-            ez = self.R @ np.array([0, 0, 1])
-        norm_ez = np.linalg.norm(ez)
+        fx = self.f_x(self.x, x_ref)
+        ez = self.R @ np.array([0, 0, 1])
+        vec = self.m / (self.dt**2) * (fx - 2 * self.fx_prev + self.x) - self.g
+        norm_ez = np.dot(ez, ez)
         if norm_ez < 1e-6:
-            ez = np.array([0, 0, 1])
+            ez = np.array([0.0, 0.0, 1.0])
             norm_ez = 1.0
-        T = float(ez @ vec / (norm_ez**2))
+        T = float(ez @ vec / norm_ez)
 
-        # Compute torque
-        M = self.f_R(self.R, self.omega, R_ref)
+        fR = self.f_R(self.R, R_ref)
+        vee_term = vee(self.fR_prev.T @ fR - self.R.T @ self.fR_prev)
+        M = self.I @ (vee_term / (self.dt**2)) - np.cross(self.I @ self.omega, self.omega)
+
+        # Update stored previous values for next step
+        self.fx_prev = fx.copy()
+        self.fR_prev = fR.copy()
+
         return T, M
 
     def rotor_forces(self, T, M):
@@ -140,8 +119,8 @@ class Quadrotor:
         forces = np.clip(forces, 0.0, self.max_force)
         return forces
 
-    def step(self, x_ref, R_ref=None, auto_ref=True):
-        T, M = self.thrust_and_torque(x_ref, R_ref, auto_ref=auto_ref)
+    def step(self, x_ref, R_ref):
+        T, M = self.thrust_and_torque(x_ref, R_ref)
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
@@ -160,17 +139,8 @@ class Quadrotor:
         return forces
 
 
-def simulate(steps=100, auto_ref=True):
-    """Run a simple position-hold simulation.
-
-    Parameters
-    ----------
-    steps:
-        Number of simulation steps to run.
-    auto_ref:
-        If ``True``, compute the reference attitude from the desired
-        acceleration each step. Otherwise ``R_ref`` is used directly.
-    """
+def simulate(steps=100):
+    """Run a simple position-hold simulation."""
 
     quad = Quadrotor()
     x_ref = np.array([1.0, 1.0, 1.0])
@@ -179,7 +149,7 @@ def simulate(steps=100, auto_ref=True):
     positions = []
     forces = []
     for _ in range(steps):
-        f = quad.step(x_ref, R_ref, auto_ref=auto_ref)
+        f = quad.step(x_ref, R_ref)
         positions.append(quad.x.copy())
         forces.append(f)
     return np.array(positions), np.array(forces)
@@ -193,7 +163,7 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces = simulate(200, auto_ref=True)
+    positions, forces = simulate(200)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
