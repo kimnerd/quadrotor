@@ -25,6 +25,8 @@ vehicle tilts toward the target position. The path to the goal can be divided
 into intermediate waypoints by setting the ``segments`` parameter of
 ``simulate``. This controls how finely the path is subdivided and is independent
 of the number of simulation steps, allowing gentler control toward the target.
+Waypoints are generated lazily, so extremely large ``segments`` values do not
+consume excessive memory.
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
