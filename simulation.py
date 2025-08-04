@@ -68,17 +68,20 @@ class Quadrotor:
 
     def f_x(self, x, v, x_ref):
         """PID controller for translational dynamics returning acceleration."""
-        k_p, k_d, k_i = 1.0, 0.5, 0.1
+        k_p, k_d, k_i = 4.0, 1.5, 0.5
         error = x_ref - x
         self.x_int += error * self.dt
+        # simple anti-windup to keep the integral term bounded
+        self.x_int = np.clip(self.x_int, -0.5, 0.5)
         return k_p * error - k_d * v + k_i * self.x_int
 
     def f_R(self, R, omega, R_ref):
         """PID controller for rotational dynamics returning torque."""
-        k_p, k_d, k_i = 4.0, 0.1, 0.05
+        k_p, k_d, k_i = 8.0, 0.3, 0.1
         e_R_mat = 0.5 * (R_ref.T @ R - R.T @ R_ref)
         e_R = vee(e_R_mat)
         self.R_int += e_R * self.dt
+        self.R_int = np.clip(self.R_int, -0.5, 0.5)
         return -k_p * e_R - k_d * omega - k_i * self.R_int
 
     def thrust_and_torque(self, x_ref, R_ref):
