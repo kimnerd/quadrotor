@@ -22,8 +22,9 @@ python simulation.py
 
 The simulation now computes a reference attitude `R_ref` on each step so the
 vehicle tilts toward the target position. The path to the goal can be divided
-into intermediate waypoints by setting the ``n_segments`` parameter of
-``simulate``. This allows gentler control toward the target.
+into intermediate waypoints by setting the ``segments`` parameter of
+``simulate``. This controls how finely the path is subdivided and is independent
+of the number of simulation steps, allowing gentler control toward the target.
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
