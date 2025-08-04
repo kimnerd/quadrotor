@@ -73,6 +73,28 @@ def compute_R_ref(current_pos: np.ndarray, target_pos: np.ndarray) -> np.ndarray
     return make_R_ref_from_acc(a_cmd)
 
 
+def generate_reference_points(
+    start: np.ndarray, goal: np.ndarray, n_segments: int = 10
+) -> list[np.ndarray]:
+    """Generate evenly spaced waypoints between ``start`` and ``goal``.
+
+    Parameters
+    ----------
+    start:
+        Starting position.
+    goal:
+        Target position.
+    n_segments:
+        Number of segments dividing the straight line path. Higher values
+        create more intermediate reference points.
+    """
+
+    if n_segments < 1:
+        return [goal]
+    weights = np.linspace(0.0, 1.0, n_segments + 1)[1:]
+    return [start + w * (goal - start) for w in weights]
+
+
 class Quadrotor:
     def __init__(self, dt=0.01):
         self.dt = dt
@@ -94,6 +116,15 @@ class Quadrotor:
         # Previous values required for the discrete-time control law
         self.fx_prev = self.x.copy()
         self.fR_prev = self.R.copy()
+
+        # Path following state
+        self.path: list[np.ndarray] = []
+        self.current_wp = 0
+
+    def set_path(self, path: list[np.ndarray]):
+        """Assign a list of waypoints for the quadrotor to follow."""
+        self.path = list(path)
+        self.current_wp = 0
 
     def f_x(self, x, x_ref):
         """Correction function for position (placeholder)."""
@@ -138,7 +169,20 @@ class Quadrotor:
         forces = np.clip(forces, 0.0, self.max_force)
         return forces
 
-    def step(self, x_ref, R_ref):
+    def step(self) -> np.ndarray:
+        """Advance the simulation by one time step following the path."""
+
+        if self.current_wp < len(self.path):
+            x_ref = self.path[self.current_wp]
+            if np.linalg.norm(self.x - x_ref) < 1e-2:
+                self.current_wp += 1
+                if self.current_wp < len(self.path):
+                    x_ref = self.path[self.current_wp]
+        else:
+            x_ref = self.x
+
+        R_ref = compute_R_ref(self.x, x_ref)
+
         T, M = self.thrust_and_torque(x_ref, R_ref)
         forces = self.rotor_forces(T, M)
 
@@ -158,16 +202,20 @@ class Quadrotor:
         return forces
 
 
-def simulate(steps=100):
-    """Run a simple position-hold simulation."""
+def simulate(
+    steps: int = 100, target: np.ndarray | None = None, n_segments: int = 10
+):
+    """Run a simple path-following simulation."""
 
     quad = Quadrotor()
-    x_ref = np.array([1.0, 1.0, 1.0])
+    if target is None:
+        target = np.array([1.0, 1.0, 1.0])
+    quad.set_path(generate_reference_points(quad.x, target, n_segments))
+
     positions = []
     forces = []
     for _ in range(steps):
-        R_ref = compute_R_ref(quad.x, x_ref)
-        f = quad.step(x_ref, R_ref)
+        f = quad.step()
         positions.append(quad.x.copy())
         forces.append(f)
     return np.array(positions), np.array(forces)

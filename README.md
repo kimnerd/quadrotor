@@ -21,8 +21,9 @@ python simulation.py
 ```
 
 The simulation now computes a reference attitude `R_ref` on each step so the
-vehicle tilts toward the target position.  This allows the quadrotor to move in
-the horizontal `x` and `y` directions in addition to holding altitude.
+vehicle tilts toward the target position. The path to the goal can be divided
+into intermediate waypoints by setting the ``n_segments`` parameter of
+``simulate``. This allows gentler control toward the target.
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
