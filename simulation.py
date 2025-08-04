@@ -5,6 +5,8 @@ except ImportError as exc:  # pragma: no cover - runtime dependency guard
         "numpy is required to run this simulation. Install it via 'pip install numpy'."
     ) from exc
 
+from typing import Iterable, Iterator, Optional
+
 
 def hat(omega: np.ndarray) -> np.ndarray:
     """Skew-symmetric matrix of omega."""
@@ -75,8 +77,12 @@ def compute_R_ref(current_pos: np.ndarray, target_pos: np.ndarray) -> np.ndarray
 
 def generate_reference_points(
     start: np.ndarray, goal: np.ndarray, n_segments: int = 10
-) -> list[np.ndarray]:
-    """Generate evenly spaced waypoints between ``start`` and ``goal``.
+) -> Iterator[np.ndarray]:
+    """Yield evenly spaced waypoints between ``start`` and ``goal``.
+
+    The function returns a generator so that only one waypoint is held in
+    memory at a time.  This allows extremely large ``n_segments`` values
+    without allocating massive arrays.
 
     Parameters
     ----------
@@ -90,9 +96,11 @@ def generate_reference_points(
     """
 
     if n_segments < 1:
-        return [goal]
-    weights = np.linspace(0.0, 1.0, n_segments + 1)[1:]
-    return [start + w * (goal - start) for w in weights]
+        yield goal
+        return
+    step = (goal - start) / n_segments
+    for i in range(1, n_segments + 1):
+        yield start + step * i
 
 
 class Quadrotor:
@@ -118,13 +126,13 @@ class Quadrotor:
         self.fR_prev = self.R.copy()
 
         # Path following state
-        self.path: list[np.ndarray] = []
-        self.current_wp = 0
+        self.path_iter: Optional[Iterator[np.ndarray]] = None
+        self.current_wp: Optional[np.ndarray] = None
 
-    def set_path(self, path: list[np.ndarray]):
-        """Assign a list of waypoints for the quadrotor to follow."""
-        self.path = list(path)
-        self.current_wp = 0
+    def set_path(self, path: Iterable[np.ndarray]):
+        """Assign a waypoint generator for the quadrotor to follow."""
+        self.path_iter = iter(path)
+        self.current_wp = next(self.path_iter, None)
 
     def f_x(self, x, x_ref):
         """Correction function for position (placeholder)."""
@@ -172,12 +180,11 @@ class Quadrotor:
     def step(self) -> np.ndarray:
         """Advance the simulation by one time step following the path."""
 
-        if self.current_wp < len(self.path):
-            x_ref = self.path[self.current_wp]
-            if np.linalg.norm(self.x - x_ref) < 1e-2:
-                self.current_wp += 1
-                if self.current_wp < len(self.path):
-                    x_ref = self.path[self.current_wp]
+        if self.current_wp is not None:
+            x_ref = self.current_wp
+            if np.linalg.norm(self.x - x_ref) < 1e-2 and self.path_iter is not None:
+                self.current_wp = next(self.path_iter, None)
+                x_ref = self.current_wp if self.current_wp is not None else self.x
         else:
             x_ref = self.x
 
