@@ -20,6 +20,33 @@ def vee(mat: np.ndarray) -> np.ndarray:
     return np.array([mat[2, 1], mat[0, 2], mat[1, 0]])
 
 
+def make_R_ref_from_acc(a_cmd: np.ndarray) -> np.ndarray:
+    """Create a reference rotation matrix from desired acceleration.
+
+    The returned matrix aligns the body z-axis with the desired force
+    direction ``a_cmd - g`` while keeping the yaw fixed so that the body
+    x-axis is as close as possible to the world x-axis.
+    """
+
+    g = np.array([0.0, 0.0, -9.81])
+    b3 = a_cmd - g
+    norm_b3 = np.linalg.norm(b3)
+    if norm_b3 < 1e-6:
+        b3 = np.array([0.0, 0.0, 1.0])
+    else:
+        b3 /= norm_b3
+
+    b1_ref = np.array([1.0, 0.0, 0.0])
+    b2 = np.cross(b3, b1_ref)
+    norm_b2 = np.linalg.norm(b2)
+    if norm_b2 < 1e-6:
+        b2 = np.array([0.0, 1.0, 0.0])
+    else:
+        b2 /= norm_b2
+    b1 = np.cross(b2, b3)
+    return np.column_stack((b1, b2, b3))
+
+
 class Quadrotor:
     def __init__(self, dt=0.01):
         self.dt = dt
@@ -57,6 +84,7 @@ class Quadrotor:
     def thrust_and_torque(self, x_ref, R_ref):
         # Compute thrust
         a_cmd = self.f_x(self.x, self.v, x_ref)
+        R_ref = make_R_ref_from_acc(a_cmd)
         vec = self.m * (a_cmd - self.g)
         ez = self.R @ np.array([0, 0, 1])
         norm_ez = np.linalg.norm(ez)
