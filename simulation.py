@@ -20,15 +20,22 @@ def vee(mat: np.ndarray) -> np.ndarray:
     return np.array([mat[2, 1], mat[0, 2], mat[1, 0]])
 
 
-def make_R_ref_from_acc(a_cmd: np.ndarray) -> np.ndarray:
+def make_R_ref_from_acc(a_cmd: np.ndarray, g: np.ndarray = np.array([0.0, 0.0, -9.81])) -> np.ndarray:
     """Create a reference rotation matrix from desired acceleration.
 
     The returned matrix aligns the body z-axis with the desired force
     direction ``a_cmd - g`` while keeping the yaw fixed so that the body
     x-axis is as close as possible to the world x-axis.
+
+    Parameters
+    ----------
+    a_cmd:
+        Desired acceleration command.
+    g:
+        Gravity vector used to compute the desired force direction. Defaults
+        to standard Earth gravity ``[0, 0, -9.81]``.
     """
 
-    g = np.array([0.0, 0.0, -9.81])
     b3 = a_cmd - g
     norm_b3 = np.linalg.norm(b3)
     if norm_b3 < 1e-6:
@@ -102,7 +109,7 @@ class Quadrotor:
         # Compute thrust command
         a_cmd = self.f_x(self.x, self.v, x_ref)
         if auto_ref:
-            R_ref = make_R_ref_from_acc(a_cmd)
+            R_ref = make_R_ref_from_acc(a_cmd, self.g)
         elif R_ref is None:
             R_ref = np.eye(3)
         vec = self.m * (a_cmd - self.g)
@@ -136,7 +143,7 @@ class Quadrotor:
 
         # Update translational dynamics
         self.x += self.dt * self.v
-        self.v += self.dt * (self.g + self.R @ np.array([0, 0, 1]) * T) / self.m
+        self.v += self.dt * (self.g + (self.R @ np.array([0, 0, 1]) * T) / self.m)
 
         # Update rotational dynamics
         self.omega += self.dt * np.linalg.inv(self.I) @ (
@@ -158,7 +165,7 @@ def simulate(steps=100):
     positions = []
     forces = []
     for _ in range(steps):
-        f = quad.step(x_ref, R_ref)
+        f = quad.step(x_ref, R_ref, auto_ref=False)
         positions.append(quad.x.copy())
         forces.append(f)
     return np.array(positions), np.array(forces)
