@@ -35,32 +35,38 @@ class Quadrotor:
         self.R = np.eye(3)
         self.omega = np.zeros(3)
 
-        # History for control law
-        self.x_prev = np.copy(self.x)
-        self.R_prev = np.copy(self.R)
+        # Integral errors for PID control
+        self.x_int = np.zeros(3)
+        self.R_int = np.zeros(3)
 
-    def f_x(self, x, x_ref):
-        """Correction function for position. Placeholder PD term."""
-        k_p = 0.5
-        return x + k_p * (x_ref - x)
+    def f_x(self, x, v, x_ref):
+        """PID controller for translational dynamics returning acceleration."""
+        k_p, k_d, k_i = 1.0, 0.5, 0.1
+        error = x_ref - x
+        self.x_int += error * self.dt
+        return k_p * error - k_d * v + k_i * self.x_int
 
-    def f_R(self, R, R_ref):
-        """Correction function for rotation. Returns reference orientation."""
-        return R_ref
+    def f_R(self, R, omega, R_ref):
+        """PID controller for rotational dynamics returning torque."""
+        k_p, k_d, k_i = 4.0, 0.1, 0.05
+        e_R_mat = 0.5 * (R_ref.T @ R - R.T @ R_ref)
+        e_R = vee(e_R_mat)
+        self.R_int += e_R * self.dt
+        return -k_p * e_R - k_d * omega - k_i * self.R_int
 
     def thrust_and_torque(self, x_ref, R_ref):
         # Compute thrust
-        term = (self.f_x(self.x, x_ref) - 2 * self.f_x(self.x_prev, x_ref) + self.x)
-        vec = self.m / self.dt**2 * term - self.g
+        a_cmd = self.f_x(self.x, self.v, x_ref)
+        vec = self.m * (a_cmd - self.g)
         ez = self.R @ np.array([0, 0, 1])
-        T = np.linalg.pinv(ez.reshape(3, 1)) @ vec
-        T = float(T)
+        norm_ez = np.linalg.norm(ez)
+        if norm_ez < 1e-6:
+            ez = np.array([0, 0, 1])
+            norm_ez = 1.0
+        T = float(ez @ vec / (norm_ez**2))
 
         # Compute torque
-        fR_prev = self.f_R(self.R_prev, R_ref)
-        fR_curr = self.f_R(self.R, R_ref)
-        mat = fR_prev.T @ fR_curr - self.R.T @ fR_prev
-        M = self.I / self.dt**2 @ vee(mat) - np.cross(self.I @ self.omega, self.omega)
+        M = self.f_R(self.R, self.omega, R_ref)
         return T, M
 
     def rotor_forces(self, T, M):
@@ -79,12 +85,10 @@ class Quadrotor:
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
-        self.x_prev = np.copy(self.x)
         self.x += self.dt * self.v
         self.v += self.dt * (self.g + self.R @ np.array([0, 0, 1]) * T) / self.m
 
         # Update rotational dynamics
-        self.R_prev = np.copy(self.R)
         self.omega += self.dt * np.linalg.inv(self.I) @ (
             np.cross(self.I @ self.omega, self.omega) + M
         )
