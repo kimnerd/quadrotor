@@ -113,7 +113,10 @@ class Quadrotor:
         elif R_ref is None:
             R_ref = np.eye(3)
         vec = self.m * (a_cmd - self.g)
-        ez = self.R @ np.array([0, 0, 1])
+        if auto_ref:
+            ez = R_ref @ np.array([0, 0, 1])
+        else:
+            ez = self.R @ np.array([0, 0, 1])
         norm_ez = np.linalg.norm(ez)
         if norm_ez < 1e-6:
             ez = np.array([0, 0, 1])
@@ -157,7 +160,18 @@ class Quadrotor:
         return forces
 
 
-def simulate(steps=100):
+def simulate(steps=100, auto_ref=True):
+    """Run a simple position-hold simulation.
+
+    Parameters
+    ----------
+    steps:
+        Number of simulation steps to run.
+    auto_ref:
+        If ``True``, compute the reference attitude from the desired
+        acceleration each step. Otherwise ``R_ref`` is used directly.
+    """
+
     quad = Quadrotor()
     x_ref = np.array([1.0, 1.0, 1.0])
     R_ref = np.eye(3)
@@ -165,7 +179,7 @@ def simulate(steps=100):
     positions = []
     forces = []
     for _ in range(steps):
-        f = quad.step(x_ref, R_ref, auto_ref=False)
+        f = quad.step(x_ref, R_ref, auto_ref=auto_ref)
         positions.append(quad.x.copy())
         forces.append(f)
     return np.array(positions), np.array(forces)
@@ -179,7 +193,7 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces = simulate(200)
+    positions, forces = simulate(200, auto_ref=True)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
