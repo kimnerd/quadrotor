@@ -205,12 +205,19 @@ class Quadrotor:
 def simulate(
     steps: int = 100, target: np.ndarray | None = None, n_segments: int = 10
 ):
-    """Run a simple path-following simulation."""
+    """Run a simple path-following simulation.
+
+    ``n_segments`` may be larger than the number of simulation steps. In that
+    case only the first ``steps`` segments are required, so the waypoint list is
+    capped to avoid allocating unnecessary points.
+    """
 
     quad = Quadrotor()
     if target is None:
         target = np.array([1.0, 1.0, 1.0])
-    quad.set_path(generate_reference_points(quad.x, target, n_segments))
+
+    segs = min(n_segments, steps)
+    quad.set_path(generate_reference_points(quad.x, target, segs))
 
     positions = []
     forces = []
