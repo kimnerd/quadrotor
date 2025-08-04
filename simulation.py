@@ -54,6 +54,29 @@ def make_R_ref_from_acc(a_cmd: np.ndarray, g: np.ndarray = np.array([0.0, 0.0, -
     return np.column_stack((b1, b2, b3))
 
 
+def compute_R_ref(current_pos: np.ndarray, target_pos: np.ndarray, g: np.ndarray = np.array([0.0, 0.0, -9.81])) -> np.ndarray:
+    """Compute a reference orientation pointing toward the target position.
+
+    This helper uses a simple proportional controller to generate a desired
+    acceleration and converts it to a rotation matrix via
+    :func:`make_R_ref_from_acc`.  The resulting matrix tilts the quadrotor so
+    that its thrust has a component toward ``target_pos``.
+
+    Parameters
+    ----------
+    current_pos:
+        The current position of the quadrotor.
+    target_pos:
+        Desired position to move toward.
+    g:
+        Gravity vector used when computing the desired acceleration.
+    """
+
+    kp = 1.0
+    a_cmd = kp * (target_pos - current_pos) + g
+    return make_R_ref_from_acc(a_cmd, g=g)
+
+
 class Quadrotor:
     def __init__(self, dt=0.01):
         self.dt = dt
@@ -144,11 +167,10 @@ def simulate(steps=100):
 
     quad = Quadrotor()
     x_ref = np.array([1.0, 1.0, 1.0])
-    R_ref = np.eye(3)
-
     positions = []
     forces = []
     for _ in range(steps):
+        R_ref = compute_R_ref(quad.x, x_ref, g=quad.g)
         f = quad.step(x_ref, R_ref)
         positions.append(quad.x.copy())
         forces.append(f)
