@@ -56,6 +56,13 @@ class Quadrotor:
         self.c_t = 0.01
         self.g = np.array([0.0, 0.0, -9.81])
 
+        # Tunable PID gains
+        self.kx_p, self.kx_d, self.kx_i = 2.0, 0.8, 0.2
+        self.kR_p, self.kR_d, self.kR_i = 4.0, 0.2, 0.05
+
+        # Rotor force limits (Newtons)
+        self.max_force = 20.0
+
         # State variables
         self.x = np.zeros(3)
         self.v = np.zeros(3)
@@ -68,7 +75,7 @@ class Quadrotor:
 
     def f_x(self, x, v, x_ref):
         """PID controller for translational dynamics returning acceleration."""
-        k_p, k_d, k_i = 4.0, 1.5, 0.5
+        k_p, k_d, k_i = self.kx_p, self.kx_d, self.kx_i
         error = x_ref - x
         self.x_int += error * self.dt
         # simple anti-windup to keep the integral term bounded
@@ -77,17 +84,27 @@ class Quadrotor:
 
     def f_R(self, R, omega, R_ref):
         """PID controller for rotational dynamics returning torque."""
-        k_p, k_d, k_i = 8.0, 0.3, 0.1
+        k_p, k_d, k_i = self.kR_p, self.kR_d, self.kR_i
         e_R_mat = 0.5 * (R_ref.T @ R - R.T @ R_ref)
         e_R = vee(e_R_mat)
         self.R_int += e_R * self.dt
         self.R_int = np.clip(self.R_int, -0.5, 0.5)
         return -k_p * e_R - k_d * omega - k_i * self.R_int
 
-    def thrust_and_torque(self, x_ref, R_ref):
-        # Compute thrust
+    def thrust_and_torque(self, x_ref, R_ref=None, auto_ref=True):
+        """Return thrust and torque for given references.
+
+        If ``auto_ref`` is True, ``R_ref`` is ignored and a reference
+        attitude is computed from the desired acceleration. Otherwise the
+        provided ``R_ref`` is used (or identity if ``None``).
+        """
+
+        # Compute thrust command
         a_cmd = self.f_x(self.x, self.v, x_ref)
-        R_ref = make_R_ref_from_acc(a_cmd)
+        if auto_ref:
+            R_ref = make_R_ref_from_acc(a_cmd)
+        elif R_ref is None:
+            R_ref = np.eye(3)
         vec = self.m * (a_cmd - self.g)
         ez = self.R @ np.array([0, 0, 1])
         norm_ez = np.linalg.norm(ez)
@@ -109,10 +126,12 @@ class Quadrotor:
             [-c_t, c_t, -c_t, c_t],
         ])
         forces = np.linalg.pinv(A) @ np.concatenate(([T], M))
+        # Enforce physical rotor limits
+        forces = np.clip(forces, 0.0, self.max_force)
         return forces
 
-    def step(self, x_ref, R_ref):
-        T, M = self.thrust_and_torque(x_ref, R_ref)
+    def step(self, x_ref, R_ref=None, auto_ref=True):
+        T, M = self.thrust_and_torque(x_ref, R_ref, auto_ref=auto_ref)
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
