@@ -20,13 +20,10 @@ Execute the main script to simulate the quadrotor for 200 steps, print a few sam
 python simulation.py
 ```
 
-The simulation now computes a reference attitude `R_ref` on each step so the
-vehicle tilts toward the target position. The path to the goal can be divided
-into intermediate waypoints by setting the ``segments`` parameter of
-``simulate``. This controls how finely the path is subdivided and is independent
-of the number of simulation steps, allowing gentler control toward the target.
-Waypoints are generated lazily, so extremely large ``segments`` values do not
-consume excessive memory.
+The simulation now computes a reference attitude `R_ref` from the instantaneous
+acceleration at each step so the vehicle tilts toward the target position. A
+smooth cubic trajectory is used so that the quadrotor starts and stops at rest
+while moving from the origin to the goal.
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
