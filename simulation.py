@@ -22,6 +22,29 @@ def vee(mat: np.ndarray) -> np.ndarray:
     return np.array([mat[2, 1], mat[0, 2], mat[1, 0]])
 
 
+def exp_SO3(omega: np.ndarray) -> np.ndarray:
+    """Matrix exponential for so(3) vectors."""
+    theta = np.linalg.norm(omega)
+    K = hat(omega)
+    if theta < 1e-8:
+        return np.eye(3) + K
+    return (
+        np.eye(3)
+        + (np.sin(theta) / theta) * K
+        + ((1 - np.cos(theta)) / (theta**2)) * (K @ K)
+    )
+
+
+def log_SO3(R: np.ndarray) -> np.ndarray:
+    """Matrix logarithm for elements of SO(3)."""
+    cos_theta = (np.trace(R) - 1) / 2.0
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    theta = np.arccos(cos_theta)
+    if theta < 1e-8:
+        return 0.5 * (R - R.T)
+    return theta / (2 * np.sin(theta)) * (R - R.T)
+
+
 def make_R_ref_from_acc(a_cmd: np.ndarray) -> np.ndarray:
     """Create a reference rotation matrix from a desired direction.
 
@@ -121,15 +144,15 @@ class Quadrotor:
         self.R = np.eye(3)
         self.omega = np.zeros(3)
 
-        # Previous values required for the discrete-time control law
-        self.fx_prev = self.x.copy()
-        self.fR_prev = self.R.copy()
+        # Reference orientation state
+        self.R_ref = self.R.copy()
 
-        # PID controller state
+        # PID controller state for position
         self.pos_err_int = np.zeros(3)
         self.pos_err_prev = np.zeros(3)
-        self.att_err_int = np.zeros(3)
-        self.att_err_prev = np.zeros(3)
+
+        # Previous rotation error for torque computation
+        self.fR_err_prev = np.zeros(3)
 
         # PID gains
         self.kp_pos = 1.0
@@ -137,7 +160,7 @@ class Quadrotor:
         self.kd_pos = 0.3
         self.kp_att = 1.0
         self.ki_att = 0.0
-        self.kd_att = 0.3
+        self.kd_att = 0.3  # Retained for compatibility
 
         # Path following state
         self.path_iter: Optional[Iterator[np.ndarray]] = None
@@ -149,71 +172,48 @@ class Quadrotor:
         self.current_wp = next(self.path_iter, None)
 
         # Reset stored terms for new path
-        self.fx_prev = self.x.copy()
-        self.fR_prev = self.R.copy()
+        self.R_ref = self.R.copy()
+        self.fR_err_prev.fill(0.0)
         self.pos_err_int.fill(0.0)
         self.pos_err_prev.fill(0.0)
-        self.att_err_int.fill(0.0)
-        self.att_err_prev.fill(0.0)
+        # No attitude integral state needed for structured control
 
-    def f_x(self, x, x_ref):
-        """PID correction for position."""
+    def a_ref(self, x, x_ref):
+        """PID acceleration command for position."""
         err = x_ref - x
         self.pos_err_int += err * self.dt
         derr = (err - self.pos_err_prev) / self.dt
         self.pos_err_prev = err
-        correction = (
+        return (
             self.kp_pos * err
             + self.ki_pos * self.pos_err_int
             + self.kd_pos * derr
         )
-        return x_ref + correction
 
-    def f_R(self, R, R_ref):
-        """PID correction for rotation."""
-        R_err_mat = R_ref.T @ R - R.T @ R_ref
-        err = 0.5 * vee(R_err_mat)
-        self.att_err_int += err * self.dt
-        derr = (err - self.att_err_prev) / self.dt
-        self.att_err_prev = err
-        correction = (
-            self.kp_att * err
-            + self.ki_att * self.att_err_int
-            + self.kd_att * derr
-        )
-        fR = R_ref @ (np.eye(3) + hat(correction))
-        # Re-orthonormalize
-        u, _, vh = np.linalg.svd(fR)
-        return u @ vh
+    def rotation_error(self, R, R_ref):
+        """Geodesic rotation error vector."""
+        return vee(log_SO3(R.T @ R_ref))
 
     def thrust_and_torque(self, x_ref, R_ref):
         """Return thrust and torque using the structured control law."""
 
-        fx = self.f_x(self.x, x_ref)
+        a_cmd = self.a_ref(self.x, x_ref)
+        max_a = 1e3
+        norm_a = np.linalg.norm(a_cmd)
+        if norm_a > max_a:
+            a_cmd = a_cmd / norm_a * max_a
         ez = self.R @ np.array([0, 0, 1])
-        vec = self.m / (self.dt**2) * (fx - 2 * self.fx_prev + self.x) - self.g
-        # Saturate anomalous accelerations from second difference
-        max_vec = 1e3
-        norm_vec = np.linalg.norm(vec)
-        if norm_vec > max_vec:
-            vec = vec / norm_vec * max_vec
-        norm_ez = np.dot(ez, ez)
-        if norm_ez < 1e-6:
-            ez = np.array([0.0, 0.0, 1.0])
-            norm_ez = 1.0
-        T = float(ez @ vec / norm_ez)
+        T = float(ez @ (self.m * a_cmd - self.g))
 
-        fR = self.f_R(self.R, R_ref)
-        vee_term = vee(self.fR_prev.T @ fR - self.R.T @ self.fR_prev)
-        max_vee = 1e3
-        norm_vee = np.linalg.norm(vee_term)
-        if norm_vee > max_vee:
-            vee_term = vee_term / norm_vee * max_vee
-        M = self.I @ (vee_term / (self.dt**2)) - np.cross(self.I @ self.omega, self.omega)
+        rot_err = self.rotation_error(self.R, R_ref)
+        diff = rot_err - self.fR_err_prev
+        max_diff = 1e3
+        norm_diff = np.linalg.norm(diff)
+        if norm_diff > max_diff:
+            diff = diff / norm_diff * max_diff
+        M = self.I @ (diff / (self.dt**2)) - np.cross(self.I @ self.omega, self.omega)
 
-        # Update stored previous values for next step
-        self.fx_prev = fx.copy()
-        self.fR_prev = fR.copy()
+        self.fR_err_prev = rot_err.copy()
 
         return T, M
 
@@ -254,9 +254,13 @@ class Quadrotor:
         else:
             x_ref = self.x
 
-        R_ref = compute_R_ref(self.x, x_ref)
+        R_des = compute_R_ref(self.x, x_ref)
+        omega_ref = vee(log_SO3(self.R_ref.T @ R_des)) / self.dt
+        self.R_ref = self.R_ref @ exp_SO3(self.dt * omega_ref)
+        u, _, vh = np.linalg.svd(self.R_ref)
+        self.R_ref = u @ vh
 
-        T, M = self.thrust_and_torque(x_ref, R_ref)
+        T, M = self.thrust_and_torque(x_ref, self.R_ref)
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
@@ -273,12 +277,12 @@ class Quadrotor:
         self.R = u @ vh
 
         # Compute attitude tracking error with respect to the reference
-        R_err = R_ref.T @ self.R
+        R_err = self.R_ref.T @ self.R
         angle_error = np.arccos(
             np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
         )
 
-        return forces, self.R.copy(), R_ref, float(angle_error)
+        return forces, self.R.copy(), self.R_ref.copy(), float(angle_error)
 
 
 def simulate(
