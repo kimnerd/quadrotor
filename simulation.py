@@ -35,50 +35,24 @@ def exp_SO3(omega: np.ndarray) -> np.ndarray:
     )
 
 
-def log_SO3(R: np.ndarray) -> np.ndarray:
-    """Matrix logarithm for elements of SO(3)."""
-    cos_theta = (np.trace(R) - 1) / 2.0
-    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+def rotation_error(R: np.ndarray, R_ref: np.ndarray) -> np.ndarray:
+    """Geodesic orientation error ``f_R`` on SO(3)."""
+    R_err = R.T @ R_ref
+    cos_theta = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
     theta = np.arccos(cos_theta)
     if theta < 1e-8:
-        return 0.5 * (R - R.T)
-    return theta / (2 * np.sin(theta)) * (R - R.T)
-
-
-def make_R_ref_from_acc(a_cmd: np.ndarray) -> np.ndarray:
-    """Create a reference rotation matrix from a desired acceleration.
-
-    The returned matrix aligns the body z-axis with ``a_cmd`` while keeping
-    yaw as close as possible to the world x-axis.  Gravity is ignored; only
-    the direction of ``a_cmd`` matters."""
-
-    b3 = a_cmd.copy()
-    norm_b3 = np.linalg.norm(b3)
-    if norm_b3 < 1e-6:
-        b3 = np.array([0.0, 0.0, 1.0])
-    else:
-        b3 /= norm_b3
-
-    b1_ref = np.array([1.0, 0.0, 0.0])
-    b2 = np.cross(b3, b1_ref)
-    norm_b2 = np.linalg.norm(b2)
-    if norm_b2 < 1e-6:
-        b2 = np.array([0.0, 1.0, 0.0])
-    else:
-        b2 /= norm_b2
-    b1 = np.cross(b2, b3)
-    return np.column_stack((b1, b2, b3))
+        return 0.5 * vee(R_err - R_err.T)
+    return theta / (2.0 * np.sin(theta)) * vee(R_err - R_err.T)
 
 
 def generate_structured_trajectory(
     start: np.ndarray, goal: np.ndarray, n_steps: int, dt: float
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Yield ``(x_ref, a_ref)`` pairs for a smooth point-to-point move.
+    """Yield ``(x_ref, a_ref)`` pairs satisfying the discrete condition.
 
-    The returned sequence follows a cubic polynomial that ensures zero
-    velocity at the start and end points.  This avoids the unrealistic
-    constant-acceleration path previously used and better represents a
-    point-to-point maneuver.
+    The trajectory follows a cubic polynomial with zero boundary velocity.
+    Acceleration references are computed via discrete second differences
+    so that ``x_ref[k+2] - 2*x_ref[k+1] + x_ref[k] = dt**2 * a_ref[k]``.
     """
 
     if n_steps < 1:
@@ -92,13 +66,23 @@ def generate_structured_trajectory(
         return
 
     delta = goal - start
-    for k in range(n_steps):
-        t = k * dt
-        tau = t / T
-        s = 3 * tau**2 - 2 * tau**3
-        x_ref = start + delta * s
-        a_ref = delta * (6 - 12 * tau) / (T**2)
-        yield x_ref, a_ref
+    x_refs: list[np.ndarray] = []
+    for k in range(n_steps + 2):
+        if k >= n_steps:
+            x_ref = goal.copy()
+        else:
+            t = k * dt
+            tau = t / T
+            s = 3 * tau**2 - 2 * tau**3
+            x_ref = start + delta * s
+        x_refs.append(x_ref)
+
+    for k in range(n_steps + 2):
+        if k <= n_steps - 1:
+            a_ref = (x_refs[k + 2] - 2 * x_refs[k + 1] + x_refs[k]) / (dt**2)
+        else:
+            a_ref = np.zeros(3)
+        yield x_refs[k], a_ref
 
 
 def generate_orientation_refs(
@@ -130,17 +114,17 @@ class Quadrotor:
         self.R = np.eye(3)
         self.omega = np.zeros(3)
 
-        # Reference states
+        # Reference data
+        self.trans_refs: list[tuple[np.ndarray, np.ndarray]] = []
+        self.trans_idx = 0
         self.x_ref = self.x.copy()
-        self.a_ref = np.zeros(3)
+        self.fx_prev = self.x.copy()
+        self.fx_now = self.x.copy()
+
+        self.orient_refs: list[tuple[np.ndarray, np.ndarray]] = []
+        self.orient_idx = 0
         self.R_ref = self.R.copy()
-
-        # Previous rotation error for torque computation
-        self.fR_err_prev = np.zeros(3)
-
-        # Trajectory iterators
-        self.trans_iter: Optional[Iterator[tuple[np.ndarray, np.ndarray]]] = None
-        self.orient_iter: Optional[Iterator[tuple[np.ndarray, np.ndarray]]] = None
+        self.f_R_prev = self.R.copy()
 
     def set_path(
         self,
@@ -149,45 +133,56 @@ class Quadrotor:
     ) -> None:
         """Load structured reference trajectories.
 
-        Parameters
-        ----------
-        translational:
-            Iterable yielding ``(x_ref, a_ref)`` pairs.
-        orientation:
-            Iterable yielding ``(R_ref, omega_ref)`` pairs.  ``omega_ref`` is
-            integrated internally by :func:`generate_orientation_refs` and is
-            provided for completeness only.
+        ``translational`` and ``orientation`` should provide at least two steps of
+        lookahead so that the control law can form second differences.
         """
 
-        self.trans_iter = iter(translational)
-        self.x_ref, self.a_ref = next(self.trans_iter, (self.x.copy(), np.zeros(3)))
+        self.trans_refs = list(translational)
+        self.trans_idx = 0
+        if self.trans_refs:
+            self.x_ref, _ = self.trans_refs[0]
+            if len(self.trans_refs) > 1:
+                self.fx_prev = self.trans_refs[1][0]
+            else:
+                self.fx_prev = self.x_ref
+            if len(self.trans_refs) > 2:
+                self.fx_now = self.trans_refs[2][0]
+            else:
+                self.fx_now = self.trans_refs[-1][0]
 
         if orientation is not None:
-            self.orient_iter = iter(orientation)
-            self.R_ref, _ = next(
-                self.orient_iter, (self.R.copy(), np.zeros(3))
-            )
+            self.orient_refs = list(orientation)
+            self.orient_idx = 1 if len(self.orient_refs) > 1 else 0
+            self.f_R_prev = self.orient_refs[0][0]
+            if self.orient_idx < len(self.orient_refs):
+                self.R_ref = self.orient_refs[self.orient_idx][0]
+            else:
+                self.R_ref = self.f_R_prev
         else:
-            self.orient_iter = None
+            self.orient_refs = [(self.R.copy(), np.zeros(3))]
+            self.orient_idx = 0
+            self.f_R_prev = self.R.copy()
             self.R_ref = self.R.copy()
 
-        self.fR_err_prev.fill(0.0)
-
-    def rotation_error(self, R, R_ref):
-        """Geodesic rotation error vector."""
-        return vee(log_SO3(R.T @ R_ref))
-
-    def thrust_and_torque(self, a_ref, R_ref):
-        """Return thrust and torque using the structured control law."""
+    def thrust_and_torque(self) -> tuple[float, np.ndarray]:
+        """Compute thrust ``T`` and torque ``M`` following the feedback law."""
 
         ez = self.R @ np.array([0, 0, 1])
-        T = float(ez @ (self.m * a_ref - self.g))
+        T = float(
+            ez
+            @ (
+                self.m
+                * (self.fx_now - 2 * self.fx_prev + self.x)
+                / (self.dt**2)
+                - self.g
+            )
+        )
 
-        fR = self.rotation_error(self.R, R_ref)
-        diff = fR - self.fR_err_prev
-        M = self.I @ (diff / (self.dt**2)) - np.cross(self.I @ self.omega, self.omega)
-
-        self.fR_err_prev = fR.copy()
+        f_R_now = self.R_ref
+        M = self.I @ (
+            vee(self.f_R_prev.T @ f_R_now - self.R.T @ self.f_R_prev)
+            / (self.dt**2)
+        ) - np.cross(self.I @ self.omega, self.omega)
 
         return T, M
 
@@ -207,9 +202,8 @@ class Quadrotor:
     def step(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """Advance the simulation one step using preloaded references."""
 
-        x_ref, a_ref, R_ref = self.x_ref, self.a_ref, self.R_ref
-
-        T, M = self.thrust_and_torque(a_ref, R_ref)
+        R_ref_now = self.R_ref
+        T, M = self.thrust_and_torque()
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
@@ -225,22 +219,27 @@ class Quadrotor:
         self.R = u @ vh
 
         # Compute attitude tracking error with respect to the reference
-        R_err = R_ref.T @ self.R
+        R_err = R_ref_now.T @ self.R
         angle_error = np.arccos(
             np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
         )
 
         # Advance references for next step
-        if self.trans_iter is not None:
-            self.x_ref, self.a_ref = next(
-                self.trans_iter, (self.x_ref, self.a_ref)
-            )
-        if self.orient_iter is not None:
-            self.R_ref, _ = next(
-                self.orient_iter, (self.R_ref, np.zeros(3))
-            )
+        self.fx_prev = self.fx_now
+        self.trans_idx += 1
+        if self.trans_idx < len(self.trans_refs):
+            self.x_ref, _ = self.trans_refs[self.trans_idx]
+        if self.trans_idx + 2 < len(self.trans_refs):
+            self.fx_now = self.trans_refs[self.trans_idx + 2][0]
+        else:
+            self.fx_now = self.trans_refs[-1][0]
 
-        return forces, self.R.copy(), R_ref.copy(), float(angle_error)
+        self.f_R_prev = R_ref_now
+        self.orient_idx += 1
+        if self.orient_idx < len(self.orient_refs):
+            self.R_ref = self.orient_refs[self.orient_idx][0]
+
+        return forces, self.R.copy(), R_ref_now.copy(), float(angle_error)
 
 
 def simulate(steps: int = 100, target: np.ndarray | None = None):
@@ -250,13 +249,14 @@ def simulate(steps: int = 100, target: np.ndarray | None = None):
     if target is None:
         target = np.array([1.0, 1.0, 1.0])
 
-    # Generate translational trajectory and orientation references from it
+    # Generate translational trajectory
     trans_traj = list(
         generate_structured_trajectory(quad.x, target, steps, quad.dt)
     )
-    orient_traj = (
-        (make_R_ref_from_acc(a_ref), np.zeros(3)) for _, a_ref in trans_traj
-    )
+
+    # Orientation references via sequential integration of desired angular rates
+    omega_refs = [np.zeros(3) for _ in trans_traj]
+    orient_traj = list(generate_orientation_refs(omega_refs, quad.R, quad.dt))
 
     quad.set_path(trans_traj, orient_traj)
 
