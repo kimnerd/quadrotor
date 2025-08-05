@@ -73,25 +73,32 @@ def make_R_ref_from_acc(a_cmd: np.ndarray) -> np.ndarray:
 def generate_structured_trajectory(
     start: np.ndarray, goal: np.ndarray, n_steps: int, dt: float
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-    """Yield ``(x_ref, a_ref)`` pairs satisfying second-order consistency.
+    """Yield ``(x_ref, a_ref)`` pairs for a smooth point-to-point move.
 
-    The position sequence follows a quadratic profile with constant
-    acceleration so that
-
-    ``x[k+2] - 2*x[k+1] + x[k] = dt**2 * a``
-
-    for all ``k``.  The constant acceleration ``a`` is chosen such that the
-    final reference ``x_ref`` equals ``goal`` at ``k = n_steps - 1``.
+    The returned sequence follows a cubic polynomial that ensures zero
+    velocity at the start and end points.  This avoids the unrealistic
+    constant-acceleration path previously used and better represents a
+    point-to-point maneuver.
     """
 
     if n_steps < 1:
         yield goal, np.zeros(3)
         return
 
-    a = 2 * (goal - start) / (((n_steps - 1) ** 2) * (dt**2))
+    T = (n_steps - 1) * dt
+    if T <= 0:
+        for _ in range(n_steps):
+            yield start, np.zeros(3)
+        return
+
+    delta = goal - start
     for k in range(n_steps):
-        x_ref = start + 0.5 * a * (k**2) * (dt**2)
-        yield x_ref, a
+        t = k * dt
+        tau = t / T
+        s = 3 * tau**2 - 2 * tau**3
+        x_ref = start + delta * s
+        a_ref = delta * (6 - 12 * tau) / (T**2)
+        yield x_ref, a_ref
 
 
 def generate_orientation_refs(
@@ -243,14 +250,13 @@ def simulate(steps: int = 100, target: np.ndarray | None = None):
     if target is None:
         target = np.array([1.0, 1.0, 1.0])
 
-    # Generate translational and rotational trajectories
-    trans_traj = generate_structured_trajectory(
-        quad.x, target, steps, quad.dt
+    # Generate translational trajectory and orientation references from it
+    trans_traj = list(
+        generate_structured_trajectory(quad.x, target, steps, quad.dt)
     )
-    a = 2 * (target - quad.x) / (((steps - 1) ** 2) * (quad.dt**2))
-    R0 = make_R_ref_from_acc(a)
-    omega_refs = (np.zeros(3) for _ in range(steps))
-    orient_traj = generate_orientation_refs(omega_refs, R0, quad.dt)
+    orient_traj = (
+        (make_R_ref_from_acc(a_ref), np.zeros(3)) for _, a_ref in trans_traj
+    )
 
     quad.set_path(trans_traj, orient_traj)
 
