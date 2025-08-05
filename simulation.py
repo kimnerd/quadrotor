@@ -125,6 +125,20 @@ class Quadrotor:
         self.fx_prev = self.x.copy()
         self.fR_prev = self.R.copy()
 
+        # PID controller state
+        self.pos_err_int = np.zeros(3)
+        self.pos_err_prev = np.zeros(3)
+        self.att_err_int = np.zeros(3)
+        self.att_err_prev = np.zeros(3)
+
+        # PID gains
+        self.kp_pos = 1.0
+        self.ki_pos = 0.0
+        self.kd_pos = 0.3
+        self.kp_att = 1.0
+        self.ki_att = 0.0
+        self.kd_att = 0.3
+
         # Path following state
         self.path_iter: Optional[Iterator[np.ndarray]] = None
         self.current_wp: Optional[np.ndarray] = None
@@ -134,13 +148,43 @@ class Quadrotor:
         self.path_iter = iter(path)
         self.current_wp = next(self.path_iter, None)
 
+        # Reset stored terms for new path
+        self.fx_prev = self.x.copy()
+        self.fR_prev = self.R.copy()
+        self.pos_err_int.fill(0.0)
+        self.pos_err_prev.fill(0.0)
+        self.att_err_int.fill(0.0)
+        self.att_err_prev.fill(0.0)
+
     def f_x(self, x, x_ref):
-        """Correction function for position (placeholder)."""
-        return x_ref
+        """PID correction for position."""
+        err = x_ref - x
+        self.pos_err_int += err * self.dt
+        derr = (err - self.pos_err_prev) / self.dt
+        self.pos_err_prev = err
+        correction = (
+            self.kp_pos * err
+            + self.ki_pos * self.pos_err_int
+            + self.kd_pos * derr
+        )
+        return x_ref + correction
 
     def f_R(self, R, R_ref):
-        """Correction function for rotation (placeholder)."""
-        return R_ref
+        """PID correction for rotation."""
+        R_err_mat = R_ref.T @ R - R.T @ R_ref
+        err = 0.5 * vee(R_err_mat)
+        self.att_err_int += err * self.dt
+        derr = (err - self.att_err_prev) / self.dt
+        self.att_err_prev = err
+        correction = (
+            self.kp_att * err
+            + self.ki_att * self.att_err_int
+            + self.kd_att * derr
+        )
+        fR = R_ref @ (np.eye(3) + hat(correction))
+        # Re-orthonormalize
+        u, _, vh = np.linalg.svd(fR)
+        return u @ vh
 
     def thrust_and_torque(self, x_ref, R_ref):
         """Return thrust and torque using the structured control law."""
@@ -148,6 +192,11 @@ class Quadrotor:
         fx = self.f_x(self.x, x_ref)
         ez = self.R @ np.array([0, 0, 1])
         vec = self.m / (self.dt**2) * (fx - 2 * self.fx_prev + self.x) - self.g
+        # Saturate anomalous accelerations from second difference
+        max_vec = 1e3
+        norm_vec = np.linalg.norm(vec)
+        if norm_vec > max_vec:
+            vec = vec / norm_vec * max_vec
         norm_ez = np.dot(ez, ez)
         if norm_ez < 1e-6:
             ez = np.array([0.0, 0.0, 1.0])
@@ -156,6 +205,10 @@ class Quadrotor:
 
         fR = self.f_R(self.R, R_ref)
         vee_term = vee(self.fR_prev.T @ fR - self.R.T @ self.fR_prev)
+        max_vee = 1e3
+        norm_vee = np.linalg.norm(vee_term)
+        if norm_vee > max_vee:
+            vee_term = vee_term / norm_vee * max_vee
         M = self.I @ (vee_term / (self.dt**2)) - np.cross(self.I @ self.omega, self.omega)
 
         # Update stored previous values for next step
