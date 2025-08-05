@@ -34,15 +34,14 @@ def exp_SO3(omega: np.ndarray) -> np.ndarray:
         + ((1 - np.cos(theta)) / (theta**2)) * (K @ K)
     )
 
+def f_x(x: np.ndarray, x_ref: np.ndarray) -> np.ndarray:
+    """Translational lift ``f_x`` returning the reference position."""
+    return x_ref
 
-def rotation_error(R: np.ndarray, R_ref: np.ndarray) -> np.ndarray:
-    """Geodesic orientation error ``f_R`` on SO(3)."""
-    R_err = R.T @ R_ref
-    cos_theta = np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
-    theta = np.arccos(cos_theta)
-    if theta < 1e-8:
-        return 0.5 * vee(R_err - R_err.T)
-    return theta / (2.0 * np.sin(theta)) * vee(R_err - R_err.T)
+
+def f_R(R: np.ndarray, R_ref: np.ndarray) -> np.ndarray:
+    """Orientation lift ``f_R`` returning the reference orientation."""
+    return R_ref
 
 
 def generate_structured_trajectory(
@@ -118,13 +117,14 @@ class Quadrotor:
         self.trans_refs: list[tuple[np.ndarray, np.ndarray]] = []
         self.trans_idx = 0
         self.x_ref = self.x.copy()
-        self.fx_prev = self.x.copy()
-        self.fx_now = self.x.copy()
+        self.f_x_prev = f_x(self.x, self.x_ref)
+        self._f_x_now = self.f_x_prev
 
         self.orient_refs: list[tuple[np.ndarray, np.ndarray]] = []
         self.orient_idx = 0
         self.R_ref = self.R.copy()
-        self.f_R_prev = self.R.copy()
+        self.f_R_prev = f_R(self.R, self.R_ref)
+        self._f_R_now = self.f_R_prev
 
     def set_path(
         self,
@@ -141,48 +141,43 @@ class Quadrotor:
         self.trans_idx = 0
         if self.trans_refs:
             self.x_ref, _ = self.trans_refs[0]
-            if len(self.trans_refs) > 1:
-                self.fx_prev = self.trans_refs[1][0]
-            else:
-                self.fx_prev = self.x_ref
-            if len(self.trans_refs) > 2:
-                self.fx_now = self.trans_refs[2][0]
-            else:
-                self.fx_now = self.trans_refs[-1][0]
-
+        else:
+            self.x_ref = self.x.copy()
+        self.f_x_prev = f_x(self.x, self.x_ref)
+        self._f_x_now = self.f_x_prev
         if orientation is not None:
             self.orient_refs = list(orientation)
-            self.orient_idx = 1 if len(self.orient_refs) > 1 else 0
-            self.f_R_prev = self.orient_refs[0][0]
-            if self.orient_idx < len(self.orient_refs):
-                self.R_ref = self.orient_refs[self.orient_idx][0]
-            else:
-                self.R_ref = self.f_R_prev
         else:
             self.orient_refs = [(self.R.copy(), np.zeros(3))]
-            self.orient_idx = 0
-            self.f_R_prev = self.R.copy()
+        self.orient_idx = 0
+        if self.orient_refs:
+            self.R_ref = self.orient_refs[0][0]
+        else:
             self.R_ref = self.R.copy()
+        self.f_R_prev = f_R(self.R, self.R_ref)
+        self._f_R_now = self.f_R_prev
 
     def thrust_and_torque(self) -> tuple[float, np.ndarray]:
         """Compute thrust ``T`` and torque ``M`` following the feedback law."""
 
         ez = self.R @ np.array([0, 0, 1])
+        f_x_now = f_x(self.x, self.x_ref)
         T = float(
             ez
             @ (
-                self.m
-                * (self.fx_now - 2 * self.fx_prev + self.x)
-                / (self.dt**2)
+                self.m * (f_x_now - 2 * self.f_x_prev + self.x) / (self.dt**2)
                 - self.g
             )
         )
 
-        f_R_now = self.R_ref
+        f_R_now = f_R(self.R, self.R_ref)
         M = self.I @ (
             vee(self.f_R_prev.T @ f_R_now - self.R.T @ self.f_R_prev)
             / (self.dt**2)
         ) - np.cross(self.I @ self.omega, self.omega)
+
+        self._f_x_now = f_x_now
+        self._f_R_now = f_R_now
 
         return T, M
 
@@ -225,16 +220,12 @@ class Quadrotor:
         )
 
         # Advance references for next step
-        self.fx_prev = self.fx_now
+        self.f_x_prev = self._f_x_now
         self.trans_idx += 1
         if self.trans_idx < len(self.trans_refs):
             self.x_ref, _ = self.trans_refs[self.trans_idx]
-        if self.trans_idx + 2 < len(self.trans_refs):
-            self.fx_now = self.trans_refs[self.trans_idx + 2][0]
-        else:
-            self.fx_now = self.trans_refs[-1][0]
 
-        self.f_R_prev = R_ref_now
+        self.f_R_prev = self._f_R_now
         self.orient_idx += 1
         if self.orient_idx < len(self.orient_refs):
             self.R_ref = self.orient_refs[self.orient_idx][0]
