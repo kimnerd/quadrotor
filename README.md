@@ -20,10 +20,29 @@ Execute the main script to simulate the quadrotor for 200 steps, print a few sam
 python simulation.py
 ```
 
-The simulation now computes a reference attitude `R_ref` from the instantaneous
-acceleration at each step so the vehicle tilts toward the target position. A
-smooth cubic trajectory is used so that the quadrotor starts and stops at rest
-while moving from the origin to the goal.
+Orientation references `R_ref` are produced by integrating desired angular
+rates with `generate_orientation_refs`.  The `simulate` helper returns the
+position and force histories, attitude errors, the actual rotation matrices, and
+the corresponding `R_ref` matrices.  By default the angular rates are zero, but
+custom values may be supplied.
+
+### Custom orientation example
+
+The snippet below commands a constant yaw rate and prints the final reference
+orientation returned by `simulate`:
+
+```python
+import numpy as np
+from simulation import simulate
+
+steps = 100
+omega_refs = [np.array([0.0, 0.0, 0.5])] * steps
+_, _, _, _, R_refs = simulate(steps, omega_refs=omega_refs)
+print(R_refs[-1])
+```
+
+A smooth cubic trajectory is still used so that the quadrotor starts and stops
+at rest while moving from the origin to the goal.
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
