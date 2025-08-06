@@ -24,8 +24,9 @@ Orientation references `R_ref` are produced by tilting the body $z$-axis toward
 the total desired acceleration `a_ref - g` at each step.  The associated angular
 rates are derived from the difference between successive orientation references.
 The `simulate` helper returns the position and force histories, attitude errors,
-the actual rotation matrices, and the corresponding `R_ref` matrices.  Custom
-angular-rate profiles may still be supplied to override this default behaviour.
+the actual rotation matrices, the translational references `x_refs`, and the
+corresponding `R_ref` matrices.  Custom angular-rate profiles may still be
+supplied to override this default behaviour.
 
 ### Custom orientation example
 
@@ -38,12 +39,23 @@ from simulation import simulate
 
 steps = 100
 omega_refs = [np.array([0.0, 0.0, 0.5])] * steps
-_, _, _, _, R_refs = simulate(steps, omega_refs=omega_refs)
+_, _, _, _, _, R_refs = simulate(steps, omega_refs=omega_refs)
 print(R_refs[-1])
 ```
 
 A smooth cubic trajectory is still used so that the quadrotor starts and stops
 at rest while moving from the origin to the goal.
+
+### Inspecting the default reference path
+
+```python
+from simulation import simulate
+
+steps = 100
+_, _, _, _, x_refs, R_refs = simulate(steps)
+print(x_refs[-1])  # near [1, 1, 1]
+print(R_refs[-1])  # final orientation reference
+```
 
 ## Testing
 The project uses `pytest` for testing (no tests are currently implemented). Run:
