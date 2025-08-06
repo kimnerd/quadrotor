@@ -140,23 +140,22 @@ class Quadrotor:
         """
 
         self.trans_refs = list(translational)
+        if len(self.trans_refs) < 3:
+            raise ValueError("translational references require at least three entries")
         self.trans_idx = 0
-        if self.trans_refs:
-            self.x_ref, _ = self.trans_refs[0]
-        else:
-            self.x_ref = self.x.copy()
-        self.f_x_prev = f_x(self.x, self.x_ref)
+        self.x_ref, _ = self.trans_refs[0]
+        self.f_x_prev = f_x(self.x, self.trans_refs[0][0])
         self._f_x_now = self.f_x_prev
+
         if orientation is not None:
             self.orient_refs = list(orientation)
         else:
-            self.orient_refs = [(self.R.copy(), np.zeros(3))]
+            self.orient_refs = [(self.R.copy(), np.zeros(3))] * len(self.trans_refs)
+        if len(self.orient_refs) < 3:
+            raise ValueError("orientation references require at least three entries")
         self.orient_idx = 0
-        if self.orient_refs:
-            self.R_ref = self.orient_refs[0][0]
-        else:
-            self.R_ref = self.R.copy()
-        self.f_R_prev = f_R(self.R, self.R_ref)
+        self.R_ref = self.orient_refs[0][0]
+        self.f_R_prev = f_R(self.R, self.orient_refs[0][0])
         self._f_R_now = self.f_R_prev
 
     def thrust_and_torque(self) -> tuple[float, np.ndarray]:
@@ -196,6 +195,24 @@ class Quadrotor:
 
         R_ref_now = self.R_ref
         T, M = self.thrust_and_torque()
+
+        # Cache reference lifts for the next step
+        self.f_x_prev = self._f_x_now
+        self.f_R_prev = self._f_R_now
+
+        # Advance reference indices while keeping a two-step lookahead
+        if self.trans_idx + 3 < len(self.trans_refs):
+            self.trans_idx += 1
+            self.x_ref, _ = self.trans_refs[self.trans_idx]
+        else:
+            self.x_ref = self._f_x_now
+
+        if self.orient_idx + 3 < len(self.orient_refs):
+            self.orient_idx += 1
+            self.R_ref = self.orient_refs[self.orient_idx][0]
+        else:
+            self.R_ref = self._f_R_now
+
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
@@ -215,17 +232,6 @@ class Quadrotor:
         angle_error = np.arccos(
             np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0)
         )
-
-        # Advance references for next step
-        self.f_x_prev = self._f_x_now
-        self.trans_idx += 1
-        if self.trans_idx < len(self.trans_refs):
-            self.x_ref, _ = self.trans_refs[self.trans_idx]
-
-        self.f_R_prev = self._f_R_now
-        self.orient_idx += 1
-        if self.orient_idx < len(self.orient_refs):
-            self.R_ref = self.orient_refs[self.orient_idx][0]
 
         return forces, self.R.copy(), R_ref_now.copy(), float(angle_error)
 
