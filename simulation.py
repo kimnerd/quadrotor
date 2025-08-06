@@ -259,10 +259,36 @@ def simulate(
         generate_structured_trajectory(quad.x, target, steps, quad.dt)
     )
 
-    # Orientation references via sequential integration of desired angular rates
+    # Orientation references
     if omega_refs is None:
-        omega_refs = [np.zeros(3) for _ in trans_traj]
-    orient_traj = list(generate_orientation_refs(omega_refs, quad.R, quad.dt))
+        # Align body z-axis with required total acceleration to reach the target.
+        g = quad.g
+        R_refs = []
+        for _, a_ref in trans_traj:
+            f_d = a_ref - g
+            norm = np.linalg.norm(f_d)
+            if norm < 1e-8:
+                R_refs.append(np.eye(3))
+                continue
+            z_b = f_d / norm
+            x_c = np.array([1.0, 0.0, 0.0])
+            y_b = np.cross(z_b, x_c)
+            if np.linalg.norm(y_b) < 1e-8:
+                x_c = np.array([0.0, 1.0, 0.0])
+                y_b = np.cross(z_b, x_c)
+            y_b /= np.linalg.norm(y_b)
+            x_b = np.cross(y_b, z_b)
+            R_refs.append(np.column_stack((x_b, y_b, z_b)))
+        omega_refs = []
+        for k in range(len(R_refs) - 1):
+            Rk, Rk1 = R_refs[k], R_refs[k + 1]
+            omega = vee((Rk.T @ Rk1 - Rk1.T @ Rk) / (2 * quad.dt))
+            omega_refs.append(omega)
+        omega_refs.append(np.zeros(3))
+        orient_traj = list(zip(R_refs, omega_refs))
+    else:
+        # Integrate supplied angular rates to produce reference orientations
+        orient_traj = list(generate_orientation_refs(omega_refs, quad.R, quad.dt))
 
     quad.set_path(trans_traj, orient_traj)
 
