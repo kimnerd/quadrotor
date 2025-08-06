@@ -161,25 +161,20 @@ class Quadrotor:
 
     def thrust_and_torque(self) -> tuple[float, np.ndarray]:
         """Compute thrust ``T`` and torque ``M`` following the feedback law."""
+        x0 = f_x(self.x, self.trans_refs[self.trans_idx][0])
+        x1 = f_x(self.x, self.trans_refs[self.trans_idx + 1][0])
+        x2 = f_x(self.x, self.trans_refs[self.trans_idx + 2][0])
+        acc = (x2 - 2 * x1 + x0) / (self.dt**2)
+        T = float((self.R @ np.array([0, 0, 1])) @ (self.m * acc - self.g))
 
-        ez = self.R @ np.array([0, 0, 1])
-        f_x_now = f_x(self.x, self.x_ref)
-        T = float(
-            ez
-            @ (
-                self.m * (f_x_now - 2 * self.f_x_prev + self.x) / (self.dt**2)
-                - self.g
-            )
-        )
+        R0 = f_R(self.R, self.orient_refs[self.orient_idx][0])
+        R1 = f_R(self.R, self.orient_refs[self.orient_idx + 1][0])
+        R2 = f_R(self.R, self.orient_refs[self.orient_idx + 2][0])
+        alpha = vee(R1.T @ R2 - R0.T @ R1) / (self.dt**2)
+        M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
 
-        f_R_now = f_R(self.R, self.R_ref)
-        M = self.I @ (
-            vee(self.f_R_prev.T @ f_R_now - self.R.T @ self.f_R_prev)
-            / (self.dt**2)
-        ) - np.cross(self.I @ self.omega, self.omega)
-
-        self._f_x_now = f_x_now
-        self._f_R_now = f_R_now
+        self._f_x_now = x1
+        self._f_R_now = R1
 
         return T, M
 
