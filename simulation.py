@@ -6,6 +6,7 @@ except ImportError as exc:  # pragma: no cover - runtime dependency guard
     ) from exc
 
 from typing import Iterable, Iterator, Optional
+from collections import deque
 
 
 def hat(omega: np.ndarray) -> np.ndarray:
@@ -126,6 +127,12 @@ class Quadrotor:
         self.f_R_prev = f_R(self.R, self.R_ref)
         self._f_R_now = self.f_R_prev
 
+        # History buffers for time-shifted evaluations
+        self.x_hist: deque[np.ndarray] = deque([self.x.copy()] * 4, maxlen=4)
+        self.x_ref_hist: deque[np.ndarray] = deque([self.x_ref.copy()] * 4, maxlen=4)
+        self.R_hist: deque[np.ndarray] = deque([self.R.copy()] * 2, maxlen=2)
+        self.R_ref_hist: deque[np.ndarray] = deque([self.R_ref.copy()] * 2, maxlen=2)
+
     def set_path(
         self,
         translational: Iterable[tuple[np.ndarray, np.ndarray]],
@@ -158,22 +165,61 @@ class Quadrotor:
         self.f_R_prev = f_R(self.R, self.orient_refs[0][0])
         self._f_R_now = self.f_R_prev
 
+        # Reset history buffers with current state and reference
+        self.x_hist = deque([self.x.copy()] * 4, maxlen=4)
+        self.x_ref_hist = deque([self.x_ref.copy()] * 4, maxlen=4)
+        self.R_hist = deque([self.R.copy()] * 2, maxlen=2)
+        self.R_ref_hist = deque([self.R_ref.copy()] * 2, maxlen=2)
+
     def thrust_and_torque(self) -> tuple[float, np.ndarray]:
-        """Compute thrust ``T`` and torque ``M`` following the feedback law."""
-        x0 = f_x(self.x, self.trans_refs[self.trans_idx][0])
-        x1 = f_x(self.x, self.trans_refs[self.trans_idx + 1][0])
-        x2 = f_x(self.x, self.trans_refs[self.trans_idx + 2][0])
-        acc = (x2 - 2 * x1 + x0) / (self.dt**2)
-        T = float((self.R @ np.array([0, 0, 1])) @ (self.m * acc - self.g))
+        """Compute thrust ``T`` and torque ``M`` following the stacked relation."""
 
-        R0 = f_R(self.R, self.orient_refs[self.orient_idx][0])
-        R1 = f_R(self.R, self.orient_refs[self.orient_idx + 1][0])
-        R2 = f_R(self.R, self.orient_refs[self.orient_idx + 2][0])
-        alpha = vee(R1.T @ R2 - R0.T @ R1) / (self.dt**2)
-        M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
+        # Predict future translational states via time-shifted ``f_x`` evaluations
+        x_hist = list(self.x_hist)
+        x_ref_hist = list(self.x_ref_hist)
+        x1 = f_x(x_hist[0], x_ref_hist[0])  # x(t+1)
+        x2 = f_x(x_hist[1], x_ref_hist[1])  # x(t+2)
+        x3 = f_x(x_hist[2], x_ref_hist[2])  # x(t+3)
+        x4 = f_x(x_hist[3], x_ref_hist[3])  # x(t+4)
 
+        # Predict future orientations
+        R_hist = list(self.R_hist)
+        R_ref_hist = list(self.R_ref_hist)
+        R1 = f_R(R_hist[0], R_ref_hist[0])  # R(t+1)
+        R2 = f_R(R_hist[1], R_ref_hist[1])  # R(t+2)
+
+        m, dt = self.m, self.dt
+
+        y0 = m / (dt**2) * (x2 - 2 * x1 + self.x) - self.g
+        y1 = m / (dt**2) * (x3 - 2 * x2 + x1) - self.g
+        y2 = m / (dt**2) * (x4 - 2 * x3 + x2) - self.g
+
+        A = np.column_stack(
+            (
+                self.R @ np.array([0, 0, 1]),
+                R1 @ np.array([0, 0, 1]),
+                R2 @ np.array([0, 0, 1]),
+            )
+        )
+        B = np.column_stack((y0, y1, y2))
+
+        if np.linalg.matrix_rank(A) < 3:
+            A_inv = np.linalg.pinv(A)
+        else:
+            A_inv = np.linalg.inv(A)
+
+        T_diag = A_inv @ B
+        T_seq = np.diag(T_diag)
+        T = float(T_seq[0])
+
+        # Store first predicted future states for caching
         self._f_x_now = x1
         self._f_R_now = R1
+
+        # Torque via discrete rotational dynamics
+        alpha_hat = R1.T @ R2 - self.R.T @ R1
+        alpha = vee(alpha_hat) / (dt**2)
+        M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
 
         return T, M
 
@@ -207,12 +253,15 @@ class Quadrotor:
             self.x_ref, _ = self.trans_refs[self.trans_idx]
         else:
             self.x_ref = self._f_x_now
-
         if self.orient_idx + 3 < len(self.orient_refs):
             self.orient_idx += 1
             self.R_ref = self.orient_refs[self.orient_idx][0]
         else:
             self.R_ref = self._f_R_now
+
+        # Append new references to history for next-step predictions
+        self.x_ref_hist.append(self.x_ref)
+        self.R_ref_hist.append(self.R_ref)
 
         forces = self.rotor_forces(T, M)
 
@@ -227,6 +276,10 @@ class Quadrotor:
         self.R += self.dt * self.R @ hat(self.omega)
         u, _, vh = np.linalg.svd(self.R)
         self.R = u @ vh
+
+        # Append new states to history buffers
+        self.x_hist.append(self.x.copy())
+        self.R_hist.append(self.R.copy())
 
         # Compute attitude tracking error with respect to the reference
         R_err = R_ref_now.T @ self.R
@@ -264,32 +317,9 @@ def simulate(
 
     # Orientation references
     if omega_refs is None:
-        # Align body z-axis with required total acceleration to reach the target.
-        g = quad.g
-        R_refs_full = []
-        for _, a_ref in trans_traj:
-            f_d = a_ref - g
-            norm = np.linalg.norm(f_d)
-            if norm < 1e-8:
-                R_refs_full.append(np.eye(3))
-                continue
-            z_b = f_d / norm
-            x_c = np.array([1.0, 0.0, 0.0])
-            y_b = np.cross(z_b, x_c)
-            if np.linalg.norm(y_b) < 1e-8:
-                x_c = np.array([0.0, 1.0, 0.0])
-                y_b = np.cross(z_b, x_c)
-            y_b /= np.linalg.norm(y_b)
-            x_b = np.cross(y_b, z_b)
-            R_refs_full.append(np.column_stack((x_b, y_b, z_b)))
-        omega_refs = []
-        for k in range(len(R_refs_full) - 1):
-            Rk, Rk1 = R_refs_full[k], R_refs_full[k + 1]
-            omega = vee((Rk.T @ Rk1 - Rk1.T @ Rk) / (2 * quad.dt))
-            omega_refs.append(omega)
-        omega_refs.append(np.zeros(3))
-        orient_traj = list(zip(R_refs_full, omega_refs))
-        R_refs = R_refs_full[:steps]
+        # Keep the vehicle pointing upward throughout the maneuver.
+        orient_traj = [(np.eye(3), np.zeros(3))] * len(trans_traj)
+        R_refs = [np.eye(3)] * steps
     else:
         # Integrate supplied angular rates to produce reference orientations
         orient_traj = list(generate_orientation_refs(omega_refs, quad.R, quad.dt))
