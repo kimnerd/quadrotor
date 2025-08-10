@@ -93,13 +93,22 @@ class Quadrotor:
 
     def rotor_forces(self, T: float, M: np.ndarray) -> np.ndarray:
         l, c_t = self.l, self.c_t
-        A = np.array([
-            [1, 1, 1, 1],
-            [0, -l, 0, l],
-            [l, 0, -l, 0],
-            [-c_t, c_t, -c_t, c_t],
+        # Start from equal thrust on all rotors
+        forces = np.full(4, T / 4.0)
+        # Roll and pitch moments
+        forces += np.array([
+            -M[1] / (2 * l),
+            -M[0] / (2 * l),
+            M[1] / (2 * l),
+            M[0] / (2 * l),
         ])
-        forces = np.linalg.pinv(A) @ np.concatenate(([T], M))
+        # Yaw moment distributed via rotor drag
+        forces += np.array([
+            -M[2] / (4 * c_t),
+            M[2] / (4 * c_t),
+            -M[2] / (4 * c_t),
+            M[2] / (4 * c_t),
+        ])
         return np.clip(forces, 0.0, self.max_force)
 
     def step(
@@ -111,11 +120,12 @@ class Quadrotor:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         """Advance the simulation one step toward the reference state."""
         # Tuned gains for accurate and well damped trajectory tracking
-        k_p = 1.2
-        k_i = 0.1
-        k_d = 4.2
-        k_R = 50.0
-        k_omega = 12.0
+        k_p = 0.6
+        k_i = 0.02
+        k_d = 1.2
+        # Moderate attitude gains avoid motor saturation yet track tilt
+        k_R = 10.0
+        k_omega = 3.0
 
         e_x = x_ref - self.x
         e_v = v_ref - self.v
