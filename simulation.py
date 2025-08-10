@@ -76,7 +76,16 @@ def generate_structured_trajectory(
 
 
 class Quadrotor:
-    def __init__(self, dt: float = 0.01):
+    def __init__(
+        self,
+        dt: float = 0.01,
+        k_p: float = 0.6,
+        k_i: float = 0.2,
+        k_d: float = 1.2,
+        k_R: float = 40.0,
+        k_omega: float = 8.0,
+        leak: float = 1.0,
+    ):
         self.dt = dt
         self.m = 1.0
         self.I = np.diag([1.0, 1.0, 1.0])
@@ -84,6 +93,14 @@ class Quadrotor:
         self.c_t = 0.01
         self.g = np.array([0.0, 0.0, -9.81])
         self.max_force = 20.0
+
+        # PID and attitude gains tuned for smooth, accurate tracking
+        self.k_p = k_p
+        self.k_i = k_i
+        self.k_d = k_d
+        self.k_R = k_R
+        self.k_omega = k_omega
+        self.leak = leak
 
         self.x = np.zeros(3)
         self.v = np.zeros(3)
@@ -119,18 +136,17 @@ class Quadrotor:
         yaw_ref: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         """Advance the simulation one step toward the reference state."""
-        # Tuned gains for accurate and well damped trajectory tracking
-        k_p = 0.6
-        k_i = 0.02
-        k_d = 1.2
-        # Moderate attitude gains avoid motor saturation yet track tilt
-        k_R = 10.0
-        k_omega = 3.0
+        # Position and attitude control gains
+        k_p = self.k_p
+        k_i = self.k_i
+        k_d = self.k_d
+        k_R = self.k_R
+        k_omega = self.k_omega
 
         e_x = x_ref - self.x
         e_v = v_ref - self.v
-        # Slight integral leak prevents windup when holding position
-        self.e_int = 0.98 * self.e_int + self.dt * e_x
+        # Optional integral leak helps prevent windup; default is no leak
+        self.e_int = self.leak * self.e_int + self.dt * e_x
         self.e_int = np.clip(self.e_int, -2.0, 2.0)
         a_cmd = a_ref + k_p * e_x + k_d * e_v + k_i * self.e_int
         R_ref = orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
@@ -208,17 +224,48 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces, attitude_errors, R_hist, x_refs, R_refs = simulate(200)
+    positions, forces, attitude_errors, R_hist, x_refs, R_refs = simulate(200, hold_steps=400)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
+    # Plot time history for quick inspection
+    plt.figure()
     plt.plot(t, positions[:, 0], label="x")
     plt.plot(t, positions[:, 1], label="y")
     plt.plot(t, positions[:, 2], label="z")
     plt.xlabel("Time [s]")
     plt.ylabel("Position [m]")
     plt.legend()
+    plt.tight_layout()
     plt.savefig("trajectory.png")
+
+    # 3D animation of the trajectory
+    from matplotlib import animation
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot(x_refs[:, 0], x_refs[:, 1], x_refs[:, 2], "k--", label="reference")
+    line, = ax.plot([], [], [], "b", label="actual")
+    point, = ax.plot([], [], [], "ro")
+    ax.set_xlim(0, 1.2)
+    ax.set_ylim(0, 1.2)
+    ax.set_zlim(0, 1.2)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.set_zlabel("z [m]")
+    ax.legend()
+
+    def update(i):
+        line.set_data(positions[: i + 1, 0], positions[: i + 1, 1])
+        line.set_3d_properties(positions[: i + 1, 2])
+        point.set_data([positions[i, 0]], [positions[i, 1]])
+        point.set_3d_properties([positions[i, 2]])
+        return line, point
+
+    ani = animation.FuncAnimation(
+        fig, update, frames=len(positions), interval=20, blit=True
+    )
+    ani.save("trajectory.gif", writer="pillow", fps=30)
 
     for i, (pos, f, err, R, x_r, R_ref) in enumerate(
         zip(

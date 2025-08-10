@@ -6,15 +6,16 @@ This repository contains a small Python example of a discrete-time quadrotor mod
 - Python 3.12+
 - `numpy`
 - `matplotlib`
+- `pillow` (for GIF animation)
 
 Install dependencies:
 
 ```bash
-pip install numpy matplotlib
+pip install numpy matplotlib pillow
 ```
 
 ## Running the simulation
-Execute the main script to simulate the quadrotor for 200 steps, print a few sample states, and generate `trajectory.png` plotting the position components versus time:
+Execute the main script to simulate the quadrotor for 200 steps and then hold at the goal, printing a few sample states and generating `trajectory.png` and an animated `trajectory.gif` showing the reference and actual 3-D paths:
 
 ```bash
 python simulation.py
@@ -27,6 +28,10 @@ The `simulate` helper returns the position and force histories, attitude errors,
 the actual rotation matrices, the translational references `x_refs`, and the
 corresponding `R_ref` matrices.  Custom angular-rate profiles may still be
 supplied to override this default behaviour.
+
+PID gains for both position and attitude control are exposed as arguments to
+the `Quadrotor` constructor.  The default values have been tuned for smooth,
+well-damped tracking of the nominal reference path.
 
 ### Custom orientation example
 
