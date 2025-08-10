@@ -50,7 +50,7 @@ def orientation_from_accel(
 def generate_structured_trajectory(
     start: np.ndarray, goal: np.ndarray, n_steps: int, dt: float
 ) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Yield ``(x_ref, v_ref, a_ref)`` along a cubic path with zero boundary velocity."""
+    """Yield (x_ref, v_ref, a_ref) along a cubic path with zero boundary velocity."""
     if n_steps < 1:
         yield start, np.zeros(3), np.zeros(3)
         return
@@ -65,12 +65,12 @@ def generate_structured_trajectory(
     for k in range(n_steps):
         t = k * dt
         tau = t / T
-        s = 3 * tau ** 2 - 2 * tau ** 3
-        v = delta / T * (6 * tau - 6 * tau ** 2)
+        s = 3 * tau**2 - 2 * tau**3
+        v = delta / T * (6 * tau - 6 * tau**2)
         if k == 0 or k == n_steps - 1:
             a = np.zeros(3)
         else:
-            a = delta / (T ** 2) * (6 - 12 * tau)
+            a = delta / (T**2) * (6 - 12 * tau)
         x_ref = start + delta * s
         yield x_ref, v, a
 
