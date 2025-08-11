@@ -111,14 +111,14 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        # PID gains tuned for balanced response with rotor saturation
-        k_p: float = 3.0,
-        k_i: float = 0.1,
-        k_d: float = 0.7,
+        # PID gains tuned to reach the destination with minimal overshoot
+        k_p: float = 0.5,
+        k_i: float = 0.0,
+        k_d: float = 0.9,
         leak: float = 1.0,
-        k_pz: float | None = 3.0,
+        k_pz: float | None = 2.5,
         k_iz: float | None = 0.1,
-        k_dz: float | None = 0.7,
+        k_dz: float | None = 1.0,
     ):
         self.dt = dt
         self.m = 1.0
@@ -308,9 +308,11 @@ def simulate(
     steps: int = 100,
     target: np.ndarray | None = None,
     hold_steps: int = 0,
+    quad: Quadrotor | None = None,
 ):
     """Run the quadrotor simulation and optionally hold at the goal."""
-    quad = Quadrotor()
+    if quad is None:
+        quad = Quadrotor()
     if target is None:
         target = np.array([1.0, 1.0, 1.0])
 
@@ -352,6 +354,48 @@ def simulate(
         np.array(conds),
         np.array(off_diags),
     )
+
+
+def tune_pid(
+    kp_vals: np.ndarray,
+    ki_vals: np.ndarray,
+    kd_vals: np.ndarray,
+    steps: int = 200,
+    target: np.ndarray | None = None,
+    hold_steps: int = 50,
+    terminal_weight: float = 1000.0,
+) -> tuple[tuple[float, float, float], float]:
+    """Brute-force PID tuning over a grid minimizing tracking and terminal error.
+
+    The cost accumulates squared position errors over the full trajectory while
+    also heavily penalizing the final position error after holding at the goal.
+    Additional penalties discourage large overshoots in the horizontal plane.
+    """
+    if target is None:
+        target = np.array([1.0, 1.0, 1.0])
+
+    best_gains = (0.0, 0.0, 0.0)
+    best_cost = np.inf
+    for kp in kp_vals:
+        for ki in ki_vals:
+            for kd in kd_vals:
+                quad = Quadrotor(k_p=kp, k_i=ki, k_d=kd)
+                positions, _, _, _, x_refs, _, _, _ = simulate(
+                    steps, target=target, quad=quad, hold_steps=hold_steps
+                )
+                err = positions - x_refs
+                final_err = positions[-1] - target
+                over = np.maximum(positions - target, 0.0)
+                overshoot_xy = np.max(over[:, :2], axis=0)
+                cost = float(
+                    np.sum(err**2)
+                    + terminal_weight * np.sum(final_err**2)
+                    + 100.0 * np.sum(overshoot_xy)
+                )
+                if cost < best_cost:
+                    best_cost = cost
+                    best_gains = (float(kp), float(ki), float(kd))
+    return best_gains, best_cost
 
 
 if __name__ == "__main__":
