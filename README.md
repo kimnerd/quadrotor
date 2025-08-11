@@ -30,8 +30,11 @@ corresponding `R_ref` matrices.  Custom angular-rate profiles may still be
 supplied to override this default behaviour.
 
 PID gains for both position and attitude control are exposed as arguments to
-the `Quadrotor` constructor.  The default values have been tuned for smooth,
-well-damped tracking of the nominal reference path.
+the `Quadrotor` constructor.  The default values have been tuned to drive the
+vehicle to its goal with minimal overshoot.  For additional adjustments you
+can call the `tune_pid` helper to perform a grid search over a range of PID
+coefficients, evaluating the integrated tracking error, terminal error after a
+hold at the goal, and any overshoot across the entire trajectory.
 
 ### Custom orientation example
 
