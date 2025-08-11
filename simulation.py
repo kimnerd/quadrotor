@@ -111,14 +111,14 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        # PID gains tuned for closer convergence to positional goals
-        k_p: float = 13.658566456788206,
-        k_i: float = 0.541892725165471,
-        k_d: float = -9.99554733444939,
-        leak: float = 0.995,
-        k_pz: float | None = 3.502806621239776,
-        k_iz: float | None = 0.7536126100372813,
-        k_dz: float | None = -5.091050690358446,
+        # PID gains tuned for gentle, well-damped hover behaviour
+        k_p: float = 4.0,
+        k_i: float = 0.05,
+        k_d: float = 0.5,
+        leak: float = 1.0,
+        k_pz: float | None = 4.0,
+        k_iz: float | None = 0.05,
+        k_dz: float | None = 0.5,
     ):
         self.dt = dt
         self.m = 1.0
@@ -138,9 +138,9 @@ class Quadrotor:
         self.k_dz = k_d if k_dz is None else k_dz
 
         # Attitude PID gains and integral state
-        self.k_Rp = 1.0
-        self.k_Rd = 0.8
-        self.k_Ri = 0.2
+        self.k_Rp = 4.0
+        self.k_Rd = 2.0
+        self.k_Ri = 0.5
         self.leak_R = 0.995
         self.e_R_int = np.zeros(3)
 
@@ -181,6 +181,8 @@ class Quadrotor:
         k_d_vec = np.array([self.k_d, self.k_d, self.k_dz])
         k_i_vec = np.array([self.k_i, self.k_i, self.k_iz])
         a_cmd = a_ref + k_p_vec * e_x + k_d_vec * e_v + k_i_vec * self.e_int
+        # prevent excessive thrust demands from aggressive errors
+        a_cmd = np.clip(a_cmd, -1.0, 1.0)
 
         x1, v1 = self.x + self.dt * self.v, self.v + self.dt * a_cmd
         x2, v2 = x1 + self.dt * v1, v1 + self.dt * a_cmd
@@ -236,23 +238,37 @@ class Quadrotor:
         ez = np.array([0.0, 0.0, 1.0])
         A = np.column_stack((self.R @ ez, R1 @ ez, R2 @ ez))
         Y = np.column_stack((y0, y1, y2))
-        condA = np.linalg.cond(A)
 
         lam = self.lam
-        if condA > 1e3:
-            T0 = y0 @ (self.R @ ez)
-            T1 = T2 = 0.0
-        else:
+        condA = float("inf")
+        try:
+            condA = np.linalg.cond(A)
+            # During holds the three-step block inverse becomes singular;
+            # fall back to a single-step solve when ill-conditioned or failed.
+            if not np.isfinite(condA) or condA > 1e3:
+                raise np.linalg.LinAlgError
             Ainv_damped = np.linalg.inv(A.T @ A + (lam**2) * np.eye(3)) @ A.T
             D = Ainv_damped @ Y
             T0, T1, T2 = np.diag(D)
-        T = float(np.clip(T0, 0.0, 4.0 * self.max_force))
+            T = float(np.clip(T0, 0.0, 4.0 * self.max_force))
 
-        # (c) torque from discrete second difference of attitude
-        alpha_hat_raw = R1.T @ R2 - self.R.T @ R1
-        alpha_hat = 0.5 * (alpha_hat_raw - alpha_hat_raw.T)
-        alpha = vee(alpha_hat) / (dt**2)
-        M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
+            # (c) torque from discrete second difference of attitude
+            alpha_hat_raw = R1.T @ R2 - self.R.T @ R1
+            alpha_hat = 0.5 * (alpha_hat_raw - alpha_hat_raw.T)
+            alpha = vee(alpha_hat) / (dt**2)
+            M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
+        except np.linalg.LinAlgError:
+            # Simple hover control when block inverse is ill-conditioned
+            T = float(
+                np.clip((self.m * a_cmd - g) @ (self.R @ ez), 0.0, 4.0 * self.max_force)
+            )
+            R_ref = orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
+            xi = so3_log(self.R.T @ R_ref)
+            self.e_R_int = self.leak_R * self.e_R_int + self.dt * xi
+            self.e_R_int = np.clip(self.e_R_int, -1.0, 1.0)
+            M = (
+                self.k_Rp * xi - self.k_Rd * self.omega + self.k_Ri * self.e_R_int
+            )
 
         forces = self.rotor_forces(T, M)
 
@@ -271,7 +287,14 @@ class Quadrotor:
         angle_error = np.arccos(
             np.clip((np.trace(R1.T @ self.R) - 1.0) / 2.0, -1.0, 1.0)
         )
-        return forces, self.R.copy(), x_ref.copy(), R1, float(angle_error)
+        return (
+            forces,
+            self.R.copy(),
+            x_ref.copy(),
+            R1,
+            float(angle_error),
+            float(condA),
+        )
 
 
 def simulate(
@@ -291,16 +314,25 @@ def simulate(
         last = (target, np.zeros(3), np.zeros(3))
     traj.extend([last] * hold_steps)
 
-    positions, forces, attitude_errors, R_hist, x_refs, R_refs = [], [], [], [], [], []
+    positions, forces, attitude_errors, R_hist, x_refs, R_refs, conds = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
     for k in range(len(traj)):
         x_ref, v_ref, a_ref = traj[k]
-        f, R, x_r, R_ref, err = quad.step(x_ref, v_ref, a_ref)
+        f, R, x_r, R_ref, err, condA = quad.step(x_ref, v_ref, a_ref)
         positions.append(quad.x.copy())
         forces.append(f)
         R_hist.append(R)
         x_refs.append(x_r)
         R_refs.append(R_ref)
         attitude_errors.append(err)
+        conds.append(condA)
     return (
         np.array(positions),
         np.array(forces),
@@ -308,6 +340,7 @@ def simulate(
         np.array(R_hist),
         np.array(x_refs),
         np.array(R_refs),
+        np.array(conds),
     )
 
 
@@ -319,7 +352,7 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces, attitude_errors, R_hist, x_refs, R_refs = simulate(200, hold_steps=400)
+    positions, forces, attitude_errors, R_hist, x_refs, R_refs, conds = simulate(200, hold_steps=400)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
@@ -362,7 +395,7 @@ if __name__ == "__main__":
     )
     ani.save("trajectory.gif", writer="pillow", fps=30)
 
-    for i, (pos, f, err, R, x_r, R_ref) in enumerate(
+    for i, (pos, f, err, R, x_r, R_ref, condA) in enumerate(
         zip(
             positions[:5],
             forces[:5],
@@ -370,8 +403,9 @@ if __name__ == "__main__":
             R_hist[:5],
             x_refs[:5],
             R_refs[:5],
+            conds[:5],
         )
     ):
         print(
-            f"Step {i}: pos={pos}, x_ref={x_r}, forces={f}, R={R}, R_ref={R_ref}, angle_error={err}"
+            f"Step {i}: pos={pos}, x_ref={x_r}, forces={f}, R={R}, R_ref={R_ref}, angle_error={err}, condA={condA}"
         )
