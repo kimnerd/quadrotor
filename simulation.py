@@ -79,12 +79,14 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        k_p: float = 0.6,
-        k_i: float = 0.2,
-        k_d: float = 1.2,
-        k_R: float = 40.0,
-        k_omega: float = 8.0,
+        k_p: float = 0.8,
+        k_i: float = 0.3,
+        k_d: float = 1.8,
+        k_R: float = 60.0,
+        k_omega: float = 10.0,
+        k_R_i: float = 5.0,
         leak: float = 1.0,
+        leak_R: float = 1.0,
     ):
         self.dt = dt
         self.m = 1.0
@@ -100,13 +102,16 @@ class Quadrotor:
         self.k_d = k_d
         self.k_R = k_R
         self.k_omega = k_omega
+        self.k_R_i = k_R_i
         self.leak = leak
+        self.leak_R = leak_R
 
         self.x = np.zeros(3)
         self.v = np.zeros(3)
         self.R = np.eye(3)
         self.omega = np.zeros(3)
         self.e_int = np.zeros(3)
+        self.e_R_int = np.zeros(3)
 
     def rotor_forces(self, T: float, M: np.ndarray) -> np.ndarray:
         l, c_t = self.l, self.c_t
@@ -128,6 +133,23 @@ class Quadrotor:
         ])
         return np.clip(forces, 0.0, self.max_force)
 
+    def f_x(
+        self,
+        x_ref: np.ndarray,
+        v_ref: np.ndarray,
+        a_ref: np.ndarray,
+    ) -> np.ndarray:
+        """Compute desired acceleration using PID on position/velocity."""
+        e_x = x_ref - self.x
+        e_v = v_ref - self.v
+        self.e_int = self.leak * self.e_int + self.dt * e_x
+        self.e_int = np.clip(self.e_int, -2.0, 2.0)
+        return a_ref + self.k_p * e_x + self.k_d * e_v + self.k_i * self.e_int
+
+    def f_R(self, a_cmd: np.ndarray, yaw_ref: float) -> np.ndarray:
+        """Map desired acceleration and yaw into a reference attitude."""
+        return orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
+
     def step(
         self,
         x_ref: np.ndarray,
@@ -136,27 +158,18 @@ class Quadrotor:
         yaw_ref: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         """Advance the simulation one step toward the reference state."""
-        # Position and attitude control gains
-        k_p = self.k_p
-        k_i = self.k_i
-        k_d = self.k_d
-        k_R = self.k_R
-        k_omega = self.k_omega
-
-        e_x = x_ref - self.x
-        e_v = v_ref - self.v
-        # Optional integral leak helps prevent windup; default is no leak
-        self.e_int = self.leak * self.e_int + self.dt * e_x
-        self.e_int = np.clip(self.e_int, -2.0, 2.0)
-        a_cmd = a_ref + k_p * e_x + k_d * e_v + k_i * self.e_int
-        R_ref = orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
+        # Compute desired acceleration and attitude using learned maps
+        a_cmd = self.f_x(x_ref, v_ref, a_ref)
+        R_ref = self.f_R(a_cmd, yaw_ref)
 
         F_des = self.m * a_cmd - self.g
-        T = float(np.dot(F_des, self.R @ np.array([0.0, 0.0, 1.0])))
+        T = float(np.linalg.norm(F_des))
 
         e_R = 0.5 * vee(R_ref.T @ self.R - self.R.T @ R_ref)
         e_omega = self.omega
-        M = -k_R * e_R - k_omega * e_omega
+        self.e_R_int = self.leak_R * self.e_R_int + self.dt * e_R
+        self.e_R_int = np.clip(self.e_R_int, -1.0, 1.0)
+        M = -self.k_R * e_R - self.k_omega * e_omega - self.k_R_i * self.e_R_int
         M = np.clip(M, -4.0, 4.0)
 
         forces = self.rotor_forces(T, M)
