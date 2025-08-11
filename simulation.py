@@ -111,10 +111,10 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        # PID gains tuned to reach the destination with minimal overshoot
-        k_p: float = 0.5,
+        # PID gains with further damping on x/y to trim overshoot
+        k_p: float = 0.3,
         k_i: float = 0.0,
-        k_d: float = 0.9,
+        k_d: float = 1.0,
         leak: float = 1.0,
         k_pz: float | None = 2.5,
         k_iz: float | None = 0.1,
