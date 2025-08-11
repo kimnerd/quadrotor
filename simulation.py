@@ -79,14 +79,10 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        k_p: float = 0.8,
+        k_p: float = 2.0,
         k_i: float = 0.3,
-        k_d: float = 1.8,
-        k_R: float = 60.0,
-        k_omega: float = 10.0,
-        k_R_i: float = 5.0,
-        leak: float = 1.0,
-        leak_R: float = 1.0,
+        k_d: float = 2.5,
+        leak: float = 0.995,
     ):
         self.dt = dt
         self.m = 1.0
@@ -96,41 +92,29 @@ class Quadrotor:
         self.g = np.array([0.0, 0.0, -9.81])
         self.max_force = 20.0
 
-        # PID and attitude gains tuned for smooth, accurate tracking
+        # PID and attitude gains tuned for faster, well-damped tracking
         self.k_p = k_p
         self.k_i = k_i
         self.k_d = k_d
-        self.k_R = k_R
-        self.k_omega = k_omega
-        self.k_R_i = k_R_i
         self.leak = leak
-        self.leak_R = leak_R
 
         self.x = np.zeros(3)
         self.v = np.zeros(3)
         self.R = np.eye(3)
         self.omega = np.zeros(3)
         self.e_int = np.zeros(3)
-        self.e_R_int = np.zeros(3)
 
     def rotor_forces(self, T: float, M: np.ndarray) -> np.ndarray:
-        l, c_t = self.l, self.c_t
-        # Start from equal thrust on all rotors
-        forces = np.full(4, T / 4.0)
-        # Roll and pitch moments
-        forces += np.array([
-            -M[1] / (2 * l),
-            -M[0] / (2 * l),
-            M[1] / (2 * l),
-            M[0] / (2 * l),
-        ])
-        # Yaw moment distributed via rotor drag
-        forces += np.array([
-            -M[2] / (4 * c_t),
-            M[2] / (4 * c_t),
-            -M[2] / (4 * c_t),
-            M[2] / (4 * c_t),
-        ])
+        """Allocate rotor forces using a pseudoinverse map."""
+        A_alloc = np.array(
+            [
+                [1, 1, 1, 1],
+                [0, -self.l, 0, self.l],
+                [self.l, 0, -self.l, 0],
+                [-self.c_t, self.c_t, -self.c_t, self.c_t],
+            ]
+        )
+        forces = np.linalg.pinv(A_alloc) @ np.concatenate(([T], M))
         return np.clip(forces, 0.0, self.max_force)
 
     def f_x(
@@ -138,17 +122,26 @@ class Quadrotor:
         x_ref: np.ndarray,
         v_ref: np.ndarray,
         a_ref: np.ndarray,
-    ) -> np.ndarray:
-        """Compute desired acceleration using PID on position/velocity."""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """PID acceleration command and forward rollout of a double integrator."""
         e_x = x_ref - self.x
         e_v = v_ref - self.v
         self.e_int = self.leak * self.e_int + self.dt * e_x
         self.e_int = np.clip(self.e_int, -2.0, 2.0)
-        return a_ref + self.k_p * e_x + self.k_d * e_v + self.k_i * self.e_int
+        a_cmd = a_ref + self.k_p * e_x + self.k_d * e_v + self.k_i * self.e_int
 
-    def f_R(self, a_cmd: np.ndarray, yaw_ref: float) -> np.ndarray:
-        """Map desired acceleration and yaw into a reference attitude."""
-        return orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
+        x1, v1 = self.x + self.dt * self.v, self.v + self.dt * a_cmd
+        x2, v2 = x1 + self.dt * v1, v1 + self.dt * a_cmd
+        x3, v3 = x2 + self.dt * v2, v2 + self.dt * a_cmd
+        x4, v4 = x3 + self.dt * v3, v3 + self.dt * a_cmd
+        return x1, x2, x3, x4, a_cmd
+
+    def f_R(self, a_cmd: np.ndarray, yaw_ref: float) -> tuple[np.ndarray, np.ndarray]:
+        """Design future attitudes from acceleration and yaw commands."""
+        R_ref = orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
+        R1 = R_ref
+        R2 = R_ref
+        return R1, R2
 
     def step(
         self,
@@ -157,39 +150,55 @@ class Quadrotor:
         a_ref: np.ndarray,
         yaw_ref: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
-        """Advance the simulation one step toward the reference state."""
-        # Compute desired acceleration and attitude using learned maps
-        a_cmd = self.f_x(x_ref, v_ref, a_ref)
-        R_ref = self.f_R(a_cmd, yaw_ref)
+        """Advance the simulation one step using block inverse thrust solving."""
+        # (a) synthesize future trajectory and attitudes
+        x1, x2, x3, x4, a_cmd = self.f_x(x_ref, v_ref, a_ref)
+        R1, R2 = self.f_R(a_cmd, yaw_ref)
 
-        F_des = self.m * a_cmd - self.g
-        T = float(np.linalg.norm(F_des))
+        # (b) compute desired thrusts via block inverse
+        m, dt = self.m, self.dt
+        g = self.g
+        y0 = m / (dt**2) * (x2 - 2 * x1 + self.x) - g
+        y1 = m / (dt**2) * (x3 - 2 * x2 + x1) - g
+        y2 = m / (dt**2) * (x4 - 2 * x3 + x2) - g
 
-        e_R = 0.5 * vee(R_ref.T @ self.R - self.R.T @ R_ref)
-        e_omega = self.omega
-        self.e_R_int = self.leak_R * self.e_R_int + self.dt * e_R
-        self.e_R_int = np.clip(self.e_R_int, -1.0, 1.0)
-        M = -self.k_R * e_R - self.k_omega * e_omega - self.k_R_i * self.e_R_int
-        M = np.clip(M, -4.0, 4.0)
+        ez = np.array([0.0, 0.0, 1.0])
+        A = np.column_stack((self.R @ ez, R1 @ ez, R2 @ ez))
+        Y = np.column_stack((y0, y1, y2))
+
+        if np.linalg.matrix_rank(A) < 3:
+            Ainv = np.linalg.pinv(A)
+        else:
+            Ainv = np.linalg.inv(A)
+
+        D = Ainv @ Y
+        T0, T1, T2 = np.diag(D)
+        T = float(T0)
+
+        # (c) torque from discrete second difference of attitude
+        alpha_hat_raw = R1.T @ R2 - self.R.T @ R1
+        alpha_hat = 0.5 * (alpha_hat_raw - alpha_hat_raw.T)
+        alpha = vee(alpha_hat) / (dt**2)
+        M = self.I @ alpha - np.cross(self.I @ self.omega, self.omega)
 
         forces = self.rotor_forces(T, M)
 
         # Update translational dynamics
-        self.x += self.dt * self.v
-        self.v += self.dt * (self.g + (self.R @ np.array([0.0, 0.0, 1.0]) * T) / self.m)
+        self.x += dt * self.v
+        self.v += dt * (self.g + (self.R @ ez * T) / self.m)
 
         # Update rotational dynamics
-        self.omega += self.dt * np.linalg.inv(self.I) @ (
+        self.omega += dt * np.linalg.inv(self.I) @ (
             np.cross(self.I @ self.omega, self.omega) + M
         )
-        self.R += self.dt * self.R @ hat(self.omega)
+        self.R += dt * self.R @ hat(self.omega)
         u, _, vh = np.linalg.svd(self.R)
         self.R = u @ vh
 
         angle_error = np.arccos(
-            np.clip((np.trace(R_ref.T @ self.R) - 1.0) / 2.0, -1.0, 1.0)
+            np.clip((np.trace(R1.T @ self.R) - 1.0) / 2.0, -1.0, 1.0)
         )
-        return forces, self.R.copy(), x_ref.copy(), R_ref, float(angle_error)
+        return forces, self.R.copy(), x_ref.copy(), R1, float(angle_error)
 
 
 def simulate(
