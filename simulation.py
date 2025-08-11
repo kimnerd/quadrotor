@@ -111,10 +111,14 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        k_p: float = 0.5,
-        k_i: float = 0.4,
-        k_d: float = 0.0,
-        leak: float = 0.99,
+        # PID gains tuned for closer convergence to positional goals
+        k_p: float = 13.658566456788206,
+        k_i: float = 0.541892725165471,
+        k_d: float = -9.99554733444939,
+        leak: float = 0.995,
+        k_pz: float | None = 3.502806621239776,
+        k_iz: float | None = 0.7536126100372813,
+        k_dz: float | None = -5.091050690358446,
     ):
         self.dt = dt
         self.m = 1.0
@@ -129,10 +133,13 @@ class Quadrotor:
         self.k_i = k_i
         self.k_d = k_d
         self.leak = leak
+        self.k_pz = k_p if k_pz is None else k_pz
+        self.k_iz = k_i if k_iz is None else k_iz
+        self.k_dz = k_d if k_dz is None else k_dz
 
         # Attitude PID gains and integral state
-        self.k_Rp = 0.6
-        self.k_Rd = 0.5
+        self.k_Rp = 1.0
+        self.k_Rd = 0.8
         self.k_Ri = 0.2
         self.leak_R = 0.995
         self.e_R_int = np.zeros(3)
@@ -170,7 +177,10 @@ class Quadrotor:
         e_v = v_ref - self.v
         self.e_int = self.leak * self.e_int + self.dt * e_x
         self.e_int = np.clip(self.e_int, -2.0, 2.0)
-        a_cmd = a_ref + self.k_p * e_x + self.k_d * e_v + self.k_i * self.e_int
+        k_p_vec = np.array([self.k_p, self.k_p, self.k_pz])
+        k_d_vec = np.array([self.k_d, self.k_d, self.k_dz])
+        k_i_vec = np.array([self.k_i, self.k_i, self.k_iz])
+        a_cmd = a_ref + k_p_vec * e_x + k_d_vec * e_v + k_i_vec * self.e_int
 
         x1, v1 = self.x + self.dt * self.v, self.v + self.dt * a_cmd
         x2, v2 = x1 + self.dt * v1, v1 + self.dt * a_cmd
