@@ -111,14 +111,14 @@ class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        # PID gains tuned for gentle, well-damped hover behaviour
-        k_p: float = 4.0,
-        k_i: float = 0.05,
-        k_d: float = 0.5,
+        # PID gains tuned for balanced response with rotor saturation
+        k_p: float = 3.0,
+        k_i: float = 0.1,
+        k_d: float = 0.7,
         leak: float = 1.0,
-        k_pz: float | None = 4.0,
-        k_iz: float | None = 0.05,
-        k_dz: float | None = 0.5,
+        k_pz: float | None = 3.0,
+        k_iz: float | None = 0.1,
+        k_dz: float | None = 0.7,
     ):
         self.dt = dt
         self.m = 1.0
@@ -138,9 +138,9 @@ class Quadrotor:
         self.k_dz = k_d if k_dz is None else k_dz
 
         # Attitude PID gains and integral state
-        self.k_Rp = 4.0
-        self.k_Rd = 2.0
-        self.k_Ri = 0.5
+        self.k_Rp = 5.0
+        self.k_Rd = 2.5
+        self.k_Ri = 0.7
         self.leak_R = 0.995
         self.e_R_int = np.zeros(3)
 
@@ -153,8 +153,8 @@ class Quadrotor:
         self.omega = np.zeros(3)
         self.e_int = np.zeros(3)
 
-    def rotor_forces(self, T: float, M: np.ndarray) -> np.ndarray:
-        """Allocate rotor forces using a pseudoinverse map."""
+    def rotor_forces(self, T: float, M: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
+        """Allocate rotor forces and return saturated thrust/torque."""
         A_alloc = np.array(
             [
                 [1, 1, 1, 1],
@@ -163,8 +163,10 @@ class Quadrotor:
                 [-self.c_t, self.c_t, -self.c_t, self.c_t],
             ]
         )
-        forces = np.linalg.pinv(A_alloc) @ np.concatenate(([T], M))
-        return np.clip(forces, 0.0, self.max_force)
+        forces_unc = np.linalg.pinv(A_alloc) @ np.concatenate(([T], M))
+        forces = np.clip(forces_unc, 0.0, self.max_force)
+        TM_act = A_alloc @ forces
+        return forces, float(TM_act[0]), TM_act[1:]
 
     def f_x(
         self,
@@ -251,6 +253,9 @@ class Quadrotor:
             D = Ainv_damped @ Y
             T0, T1, T2 = np.diag(D)
             T = float(np.clip(T0, 0.0, 4.0 * self.max_force))
+            off_diag_norm = float(
+                np.linalg.norm(D - np.diag(np.diag(D)), ord="fro")
+            )
 
             # (c) torque from discrete second difference of attitude
             alpha_hat_raw = R1.T @ R2 - self.R.T @ R1
@@ -269,16 +274,17 @@ class Quadrotor:
             M = (
                 self.k_Rp * xi - self.k_Rd * self.omega + self.k_Ri * self.e_R_int
             )
+            off_diag_norm = float("nan")
 
-        forces = self.rotor_forces(T, M)
+        forces, T_act, M_act = self.rotor_forces(T, M)
 
-        # Update translational dynamics
+        # Update translational dynamics with actual thrust
         self.x += dt * self.v
-        self.v += dt * (self.g + (self.R @ ez * T) / self.m)
+        self.v += dt * (self.g + (self.R @ ez * T_act) / self.m)
 
-        # Update rotational dynamics
+        # Update rotational dynamics with actual moments
         self.omega += dt * np.linalg.inv(self.I) @ (
-            np.cross(self.I @ self.omega, self.omega) + M
+            np.cross(self.I @ self.omega, self.omega) + M_act
         )
         self.R += dt * self.R @ hat(self.omega)
         u, _, vh = np.linalg.svd(self.R)
@@ -294,6 +300,7 @@ class Quadrotor:
             R1,
             float(angle_error),
             float(condA),
+            off_diag_norm,
         )
 
 
@@ -314,7 +321,8 @@ def simulate(
         last = (target, np.zeros(3), np.zeros(3))
     traj.extend([last] * hold_steps)
 
-    positions, forces, attitude_errors, R_hist, x_refs, R_refs, conds = (
+    positions, forces, attitude_errors, R_hist, x_refs, R_refs, conds, off_diags = (
+        [],
         [],
         [],
         [],
@@ -325,7 +333,7 @@ def simulate(
     )
     for k in range(len(traj)):
         x_ref, v_ref, a_ref = traj[k]
-        f, R, x_r, R_ref, err, condA = quad.step(x_ref, v_ref, a_ref)
+        f, R, x_r, R_ref, err, condA, offD = quad.step(x_ref, v_ref, a_ref)
         positions.append(quad.x.copy())
         forces.append(f)
         R_hist.append(R)
@@ -333,6 +341,7 @@ def simulate(
         R_refs.append(R_ref)
         attitude_errors.append(err)
         conds.append(condA)
+        off_diags.append(offD)
     return (
         np.array(positions),
         np.array(forces),
@@ -341,6 +350,7 @@ def simulate(
         np.array(x_refs),
         np.array(R_refs),
         np.array(conds),
+        np.array(off_diags),
     )
 
 
@@ -352,7 +362,16 @@ if __name__ == "__main__":
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
 
-    positions, forces, attitude_errors, R_hist, x_refs, R_refs, conds = simulate(200, hold_steps=400)
+    (
+        positions,
+        forces,
+        attitude_errors,
+        R_hist,
+        x_refs,
+        R_refs,
+        conds,
+        off_diags,
+    ) = simulate(200, hold_steps=400)
     dt = 0.01
     t = np.arange(len(positions)) * dt
 
@@ -395,7 +414,7 @@ if __name__ == "__main__":
     )
     ani.save("trajectory.gif", writer="pillow", fps=30)
 
-    for i, (pos, f, err, R, x_r, R_ref, condA) in enumerate(
+    for i, (pos, f, err, R, x_r, R_ref, condA, offD) in enumerate(
         zip(
             positions[:5],
             forces[:5],
@@ -404,8 +423,10 @@ if __name__ == "__main__":
             x_refs[:5],
             R_refs[:5],
             conds[:5],
+            off_diags[:5],
         )
     ):
         print(
-            f"Step {i}: pos={pos}, x_ref={x_r}, forces={f}, R={R}, R_ref={R_ref}, angle_error={err}, condA={condA}"
+            f"Step {i}: pos={pos}, x_ref={x_r}, forces={f}, R={R}, R_ref={R_ref}, "
+            f"angle_error={err}, condA={condA}, off_diag_norm={offD}"
         )
