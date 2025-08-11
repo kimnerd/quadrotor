@@ -22,6 +22,30 @@ def vee(mat: np.ndarray) -> np.ndarray:
     return np.array([mat[2, 1], mat[0, 2], mat[1, 0]])
 
 
+def so3_log(R: np.ndarray) -> np.ndarray:
+    """Logarithm map from SO(3) to its Lie algebra."""
+    tr = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    theta = np.arccos(tr)
+    if theta < 1e-8:
+        return np.zeros(3)
+    return (theta / (2.0 * np.sin(theta))) * np.array(
+        [R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]
+    )
+
+
+def exp_SO3(omega: np.ndarray) -> np.ndarray:
+    """Exponential map from so(3) to SO(3)."""
+    th = np.linalg.norm(omega)
+    K = hat(omega)
+    if th < 1e-8:
+        return np.eye(3) + K
+    return (
+        np.eye(3)
+        + (np.sin(th) / th) * K
+        + ((1.0 - np.cos(th)) / th**2) * (K @ K)
+    )
+
+
 def orientation_from_accel(
     a_ref: np.ndarray,
     yaw_ref: float,
@@ -62,27 +86,35 @@ def generate_structured_trajectory(
         return
 
     delta = goal - start
+    x_refs, v_refs = [], []
     for k in range(n_steps):
         t = k * dt
         tau = t / T
         s = 3 * tau**2 - 2 * tau**3
         v = delta / T * (6 * tau - 6 * tau**2)
-        if k == 0 or k == n_steps - 1:
-            a = np.zeros(3)
-        else:
-            a = delta / (T**2) * (6 - 12 * tau)
         x_ref = start + delta * s
-        yield x_ref, v, a
+        x_refs.append(x_ref)
+        v_refs.append(v)
+
+    # extend with terminal position for discrete acceleration consistency
+    x_ext = x_refs + [goal, goal]
+    a_refs = []
+    for k in range(n_steps):
+        a = (x_ext[k + 2] - 2 * x_ext[k + 1] + x_ext[k]) / (dt**2)
+        a_refs.append(a)
+
+    for k in range(n_steps):
+        yield x_refs[k], v_refs[k], a_refs[k]
 
 
 class Quadrotor:
     def __init__(
         self,
         dt: float = 0.01,
-        k_p: float = 2.0,
-        k_i: float = 0.3,
-        k_d: float = 2.5,
-        leak: float = 0.995,
+        k_p: float = 0.5,
+        k_i: float = 0.4,
+        k_d: float = 0.0,
+        leak: float = 0.99,
     ):
         self.dt = dt
         self.m = 1.0
@@ -92,11 +124,21 @@ class Quadrotor:
         self.g = np.array([0.0, 0.0, -9.81])
         self.max_force = 20.0
 
-        # PID and attitude gains tuned for faster, well-damped tracking
+        # Translational PID gains
         self.k_p = k_p
         self.k_i = k_i
         self.k_d = k_d
         self.leak = leak
+
+        # Attitude PID gains and integral state
+        self.k_Rp = 0.6
+        self.k_Rd = 0.5
+        self.k_Ri = 0.2
+        self.leak_R = 0.995
+        self.e_R_int = np.zeros(3)
+
+        # block inverse damping parameter
+        self.lam = 1e-4
 
         self.x = np.zeros(3)
         self.v = np.zeros(3)
@@ -137,10 +179,29 @@ class Quadrotor:
         return x1, x2, x3, x4, a_cmd
 
     def f_R(self, a_cmd: np.ndarray, yaw_ref: float) -> tuple[np.ndarray, np.ndarray]:
-        """Design future attitudes from acceleration and yaw commands."""
+        """Two-step PID rollout on SO(3) for future attitude commands."""
         R_ref = orientation_from_accel(a_cmd, yaw_ref, self.m, self.g)
-        R1 = R_ref
-        R2 = R_ref
+
+        xi = so3_log(self.R.T @ R_ref)
+        self.e_R_int = self.leak_R * self.e_R_int + self.dt * xi
+        self.e_R_int = np.clip(self.e_R_int, -1.0, 1.0)
+
+        omega_cmd = (
+            self.k_Rp * xi
+            - self.k_Rd * self.omega
+            + self.k_Ri * self.e_R_int
+        )
+
+        R1 = self.R @ exp_SO3(self.dt * omega_cmd)
+
+        xi1 = so3_log(R1.T @ R_ref)
+        omega_cmd1 = (
+            self.k_Rp * xi1
+            - self.k_Rd * self.omega
+            + self.k_Ri * self.e_R_int
+        )
+
+        R2 = R1 @ exp_SO3(self.dt * omega_cmd1)
         return R1, R2
 
     def step(
@@ -165,15 +226,17 @@ class Quadrotor:
         ez = np.array([0.0, 0.0, 1.0])
         A = np.column_stack((self.R @ ez, R1 @ ez, R2 @ ez))
         Y = np.column_stack((y0, y1, y2))
+        condA = np.linalg.cond(A)
 
-        if np.linalg.matrix_rank(A) < 3:
-            Ainv = np.linalg.pinv(A)
+        lam = self.lam
+        if condA > 1e3:
+            T0 = y0 @ (self.R @ ez)
+            T1 = T2 = 0.0
         else:
-            Ainv = np.linalg.inv(A)
-
-        D = Ainv @ Y
-        T0, T1, T2 = np.diag(D)
-        T = float(T0)
+            Ainv_damped = np.linalg.inv(A.T @ A + (lam**2) * np.eye(3)) @ A.T
+            D = Ainv_damped @ Y
+            T0, T1, T2 = np.diag(D)
+        T = float(np.clip(T0, 0.0, 4.0 * self.max_force))
 
         # (c) torque from discrete second difference of attitude
         alpha_hat_raw = R1.T @ R2 - self.R.T @ R1
