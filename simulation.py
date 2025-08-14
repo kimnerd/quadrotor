@@ -434,39 +434,65 @@ if __name__ == "__main__":
         raise SystemExit(
             "matplotlib is required to plot the trajectory. Install it via 'pip install matplotlib'."
         ) from exc
+    from data_collection import collect_random_rotor_data
+    from gpr_inverse import train_inverse_gpr
 
+    # Train MR-GPR inverse model on random samples
+    X, y = collect_random_rotor_data(steps=200)
+    gpr_model = train_inverse_gpr(X, y)
+
+    # Simulate ideal inverse allocation and MR-GPR allocation
+    quad_ideal = Quadrotor()
     (
-        positions,
-        forces,
-        attitude_errors,
-        R_hist,
+        pos_ideal,
+        forces_ideal,
+        err_ideal,
+        R_hist_ideal,
         x_refs,
-        R_refs,
-        conds,
-        off_diags,
-    ) = simulate(200, hold_steps=400)
+        R_refs_ideal,
+        conds_ideal,
+        off_diags_ideal,
+    ) = simulate(200, hold_steps=400, quad=quad_ideal)
+
+    quad_gpr = Quadrotor(gpr_model=gpr_model, use_gpr=True)
+    (
+        pos_gpr,
+        forces_gpr,
+        err_gpr,
+        R_hist_gpr,
+        _,
+        _,
+        _,
+        _,
+    ) = simulate(200, hold_steps=400, quad=quad_gpr)
+
     dt = 0.01
-    t = np.arange(len(positions)) * dt
+    t = np.arange(len(pos_ideal)) * dt
 
     # Plot time history for quick inspection
     plt.figure()
-    plt.plot(t, positions[:, 0], label="x")
-    plt.plot(t, positions[:, 1], label="y")
-    plt.plot(t, positions[:, 2], label="z")
+    plt.plot(t, pos_ideal[:, 0], label="x ideal")
+    plt.plot(t, pos_ideal[:, 1], label="y ideal")
+    plt.plot(t, pos_ideal[:, 2], label="z ideal")
+    plt.plot(t, pos_gpr[:, 0], "--", label="x mr-gpr")
+    plt.plot(t, pos_gpr[:, 1], "--", label="y mr-gpr")
+    plt.plot(t, pos_gpr[:, 2], "--", label="z mr-gpr")
     plt.xlabel("Time [s]")
     plt.ylabel("Position [m]")
     plt.legend()
     plt.tight_layout()
     plt.savefig("trajectory.png")
 
-    # 3D animation of the trajectory
+    # 3D animation comparing trajectories
     from matplotlib import animation
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection="3d")
     ax.plot(x_refs[:, 0], x_refs[:, 1], x_refs[:, 2], "k--", label="reference")
-    line, = ax.plot([], [], [], "b", label="actual")
-    point, = ax.plot([], [], [], "ro")
+    line_ideal, = ax.plot([], [], [], "b", label="ideal")
+    point_ideal, = ax.plot([], [], [], "bo")
+    line_gpr, = ax.plot([], [], [], "r", label="mr-gpr")
+    point_gpr, = ax.plot([], [], [], "ro")
     ax.set_xlim(0, 1.2)
     ax.set_ylim(0, 1.2)
     ax.set_zlim(0, 1.2)
@@ -476,30 +502,49 @@ if __name__ == "__main__":
     ax.legend()
 
     def update(i):
-        line.set_data(positions[: i + 1, 0], positions[: i + 1, 1])
-        line.set_3d_properties(positions[: i + 1, 2])
-        point.set_data([positions[i, 0]], [positions[i, 1]])
-        point.set_3d_properties([positions[i, 2]])
-        return line, point
+        line_ideal.set_data(pos_ideal[: i + 1, 0], pos_ideal[: i + 1, 1])
+        line_ideal.set_3d_properties(pos_ideal[: i + 1, 2])
+        point_ideal.set_data([pos_ideal[i, 0]], [pos_ideal[i, 1]])
+        point_ideal.set_3d_properties([pos_ideal[i, 2]])
+        line_gpr.set_data(pos_gpr[: i + 1, 0], pos_gpr[: i + 1, 1])
+        line_gpr.set_3d_properties(pos_gpr[: i + 1, 2])
+        point_gpr.set_data([pos_gpr[i, 0]], [pos_gpr[i, 1]])
+        point_gpr.set_3d_properties([pos_gpr[i, 2]])
+        return line_ideal, point_ideal, line_gpr, point_gpr
 
     ani = animation.FuncAnimation(
-        fig, update, frames=len(positions), interval=20, blit=True
+        fig, update, frames=len(pos_ideal), interval=20, blit=True
     )
     ani.save("trajectory.gif", writer="pillow", fps=30)
 
-    for i, (pos, f, err, R, x_r, R_ref, condA, offD) in enumerate(
+    for i, (
+        p_i,
+        f_i,
+        e_i,
+        R_i,
+        x_r_i,
+        R_ref_i,
+        c_i,
+        off_i,
+        p_g,
+        f_g,
+        e_g,
+    ) in enumerate(
         zip(
-            positions[:5],
-            forces[:5],
-            attitude_errors[:5],
-            R_hist[:5],
+            pos_ideal[:5],
+            forces_ideal[:5],
+            err_ideal[:5],
+            R_hist_ideal[:5],
             x_refs[:5],
-            R_refs[:5],
-            conds[:5],
-            off_diags[:5],
+            R_refs_ideal[:5],
+            conds_ideal[:5],
+            off_diags_ideal[:5],
+            pos_gpr[:5],
+            forces_gpr[:5],
+            err_gpr[:5],
         )
     ):
         print(
-            f"Step {i}: pos={pos}, x_ref={x_r}, forces={f}, R={R}, R_ref={R_ref}, "
-            f"angle_error={err}, condA={condA}, off_diag_norm={offD}"
+            f"Step {i}: ideal pos={p_i}, forces={f_i}, angle_error={e_i}; "
+            f"mr-gpr pos={p_g}, forces={f_g}, angle_error={e_g}"
         )

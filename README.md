@@ -15,7 +15,7 @@ pip install numpy matplotlib pillow
 ```
 
 ## Running the simulation
-Execute the main script to simulate the quadrotor for 200 steps and then hold at the goal, printing a few sample states and generating `trajectory.png` and an animated `trajectory.gif` showing the reference and actual 3-D paths:
+Execute the main script to simulate the quadrotor for 200 steps and then hold at the goal.  The script now trains a small MR-GPR inverse model and runs both the ideal inverse allocation and MR-GPR-based allocation, printing a few sample states and generating `trajectory.png` and an animated `trajectory.gif` comparing the reference, ideal, and MR-GPR 3-D paths:
 
 ```bash
 python simulation.py
