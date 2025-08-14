@@ -7,6 +7,11 @@ except ImportError as exc:  # pragma: no cover - runtime dependency guard
 
 from typing import Iterator
 
+try:
+    from gpr_inverse import predict_forces
+except Exception:  # pragma: no cover - optional dependency
+    predict_forces = None
+
 
 def hat(omega: np.ndarray) -> np.ndarray:
     """Skew-symmetric matrix of omega."""
@@ -119,6 +124,9 @@ class Quadrotor:
         k_pz: float | None = 2.5,
         k_iz: float | None = 0.1,
         k_dz: float | None = 1.0,
+        # Optional GPR inverse model
+        gpr_model: object | None = None,
+        use_gpr: bool = False,
     ):
         self.dt = dt
         self.m = 1.0
@@ -152,6 +160,10 @@ class Quadrotor:
         self.R = np.eye(3)
         self.omega = np.zeros(3)
         self.e_int = np.zeros(3)
+
+        # GPR inverse model handle
+        self.gpr_model = gpr_model
+        self.use_gpr = use_gpr
 
     def rotor_forces(self, T: float, M: np.ndarray) -> tuple[np.ndarray, float, np.ndarray]:
         """Allocate rotor forces and return saturated thrust/torque."""
@@ -274,9 +286,26 @@ class Quadrotor:
             M = (
                 self.k_Rp * xi - self.k_Rd * self.omega + self.k_Ri * self.e_R_int
             )
+            alpha = np.zeros(3)
             off_diag_norm = float("nan")
 
-        forces, T_act, M_act = self.rotor_forces(T, M)
+        if self.use_gpr and self.gpr_model is not None and predict_forces is not None:
+            feat = np.concatenate(([T], M))
+            forces = predict_forces(self.gpr_model, feat.reshape(1, -1))[0]
+            forces = np.clip(forces, 0.0, self.max_force)
+            A_alloc = np.array(
+                [
+                    [1, 1, 1, 1],
+                    [0, -self.l, 0, self.l],
+                    [self.l, 0, -self.l, 0],
+                    [-self.c_t, self.c_t, -self.c_t, self.c_t],
+                ]
+            )
+            TM_act = A_alloc @ forces
+            T_act = float(TM_act[0])
+            M_act = TM_act[1:]
+        else:
+            forces, T_act, M_act = self.rotor_forces(T, M)
 
         # Update translational dynamics with actual thrust
         self.x += dt * self.v
