@@ -9,6 +9,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 
+import argparse
+
 from data_collection import collect_random_rotor_data
 from data_collection_residual import collect_residual_data
 from gpr_inverse import train_inverse_gpr
@@ -17,14 +19,23 @@ from residual_gpr import ResidualMRGPR
 from simulation import Quadrotor, simulate
 
 
-def main() -> None:
+def main(residual_steps: int = 3000, absolute_steps: int = 200) -> None:
+    """Run comparison experiment and save trajectory plots/GIF.
+
+    Parameters
+    ----------
+    residual_steps : int, optional
+        Number of samples for residual MR-GPR training data.
+    absolute_steps : int, optional
+        Number of samples for absolute MR-GPR training data.
+    """
     # 1) Collect residual training data and train residual model
-    X_res, Y_res = collect_residual_data(steps=3000)
+    X_res, Y_res = collect_residual_data(steps=residual_steps)
     model_res = ResidualMRGPR(input_dim=X_res.shape[1])
     model_res.fit(X_res, Y_res)
 
     # 2) Absolute MR-GPR model (existing path)
-    X_abs, y_abs = collect_random_rotor_data(steps=200)
+    X_abs, y_abs = collect_random_rotor_data(steps=absolute_steps)
     model_abs = train_inverse_gpr(X_abs, y_abs)
 
     # 3) Run simulations for the three approaches
@@ -77,6 +88,7 @@ def main() -> None:
         all_pos = np.vstack([pos_nom, pos_abs, pos_res])
         ax2.set_xlim(all_pos[:, 0].min() - 0.1, all_pos[:, 0].max() + 0.1)
         ax2.set_ylim(all_pos[:, 1].min() - 0.1, all_pos[:, 1].max() + 0.1)
+        ax2.set_aspect("equal", adjustable="box")
         ax2.set_xlabel("x")
         ax2.set_ylabel("y")
         ax2.scatter([1], [1], c="r", label="target")
@@ -99,4 +111,18 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--residual-steps",
+        type=int,
+        default=3000,
+        help="training samples for residual MR-GPR",
+    )
+    parser.add_argument(
+        "--absolute-steps",
+        type=int,
+        default=200,
+        help="training samples for absolute MR-GPR",
+    )
+    args = parser.parse_args()
+    main(residual_steps=args.residual_steps, absolute_steps=args.absolute_steps)
