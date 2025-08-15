@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
+
 from data_collection import collect_random_rotor_data
 from data_collection_residual import collect_residual_data
 from gpr_inverse import train_inverse_gpr
@@ -46,6 +51,51 @@ def main() -> None:
     ]:
         fe, ov = metrics(pos)
         print(f"{name}: final_err={fe:.4f}, overshoot_xy={ov}")
+
+    # 5) Plot trajectories and generate a GIF comparing paths
+    def save_plots_and_gif() -> None:
+        # 3-D trajectory plot
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+        for pos, label in [
+            (pos_nom, "baseline"),
+            (pos_abs, "abs-gpr"),
+            (pos_res, "res-gpr"),
+        ]:
+            ax.plot(pos[:, 0], pos[:, 1], pos[:, 2], label=label)
+        ax.scatter([1], [1], [1], c="r", label="target")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.legend()
+        fig.tight_layout()
+        plt.savefig("trajectory_compare.png")
+        plt.close(fig)
+
+        # GIF: top-down XY view using Matplotlib animation
+        fig2, ax2 = plt.subplots()
+        all_pos = np.vstack([pos_nom, pos_abs, pos_res])
+        ax2.set_xlim(all_pos[:, 0].min() - 0.1, all_pos[:, 0].max() + 0.1)
+        ax2.set_ylim(all_pos[:, 1].min() - 0.1, all_pos[:, 1].max() + 0.1)
+        ax2.set_xlabel("x")
+        ax2.set_ylabel("y")
+        ax2.scatter([1], [1], c="r", label="target")
+        line_nom, = ax2.plot([], [], label="baseline")
+        line_abs, = ax2.plot([], [], label="abs-gpr")
+        line_res, = ax2.plot([], [], label="res-gpr")
+        ax2.legend()
+
+        def update(frame: int):
+            line_nom.set_data(pos_nom[:frame, 0], pos_nom[:frame, 1])
+            line_abs.set_data(pos_abs[:frame, 0], pos_abs[:frame, 1])
+            line_res.set_data(pos_res[:frame, 0], pos_res[:frame, 1])
+            return line_nom, line_abs, line_res
+
+        anim = FuncAnimation(fig2, update, frames=pos_nom.shape[0], interval=50, blit=True)
+        anim.save("trajectory_compare.gif", writer=PillowWriter(fps=20))
+        plt.close(fig2)
+
+    save_plots_and_gif()
 
 
 if __name__ == "__main__":
