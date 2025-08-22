@@ -437,11 +437,13 @@ if __name__ == "__main__":
     from data_collection import collect_random_rotor_data
     from gpr_inverse import train_inverse_gpr
 
-    # Train MR-GPR inverse model on random samples
-    X, y = collect_random_rotor_data(steps=200)
-    gpr_model = train_inverse_gpr(X, y)
+    # Train MR-GPR inverse models on random samples
+    X_small, y_small = collect_random_rotor_data(steps=200)
+    gpr_model_small = train_inverse_gpr(X_small, y_small)
+    X_big, y_big = collect_random_rotor_data(steps=1000)
+    gpr_model_big = train_inverse_gpr(X_big, y_big)
 
-    # Simulate ideal inverse allocation and MR-GPR allocation
+    # Simulate ideal inverse allocation and MR-GPR allocations
     quad_ideal = Quadrotor()
     (
         pos_ideal,
@@ -454,17 +456,29 @@ if __name__ == "__main__":
         off_diags_ideal,
     ) = simulate(200, hold_steps=400, quad=quad_ideal)
 
-    quad_gpr = Quadrotor(gpr_model=gpr_model, use_gpr=True)
+    quad_gpr_small = Quadrotor(gpr_model=gpr_model_small, use_gpr=True)
     (
-        pos_gpr,
-        forces_gpr,
-        err_gpr,
-        R_hist_gpr,
+        pos_gpr_small,
+        forces_gpr_small,
+        err_gpr_small,
+        R_hist_gpr_small,
         _,
         _,
         _,
         _,
-    ) = simulate(200, hold_steps=400, quad=quad_gpr)
+    ) = simulate(200, hold_steps=400, quad=quad_gpr_small)
+
+    quad_gpr_big = Quadrotor(gpr_model=gpr_model_big, use_gpr=True)
+    (
+        pos_gpr_big,
+        forces_gpr_big,
+        err_gpr_big,
+        R_hist_gpr_big,
+        _,
+        _,
+        _,
+        _,
+    ) = simulate(200, hold_steps=400, quad=quad_gpr_big)
 
     dt = 0.01
     t = np.arange(len(pos_ideal)) * dt
@@ -474,9 +488,12 @@ if __name__ == "__main__":
     plt.plot(t, pos_ideal[:, 0], label="x ideal")
     plt.plot(t, pos_ideal[:, 1], label="y ideal")
     plt.plot(t, pos_ideal[:, 2], label="z ideal")
-    plt.plot(t, pos_gpr[:, 0], "--", label="x mr-gpr")
-    plt.plot(t, pos_gpr[:, 1], "--", label="y mr-gpr")
-    plt.plot(t, pos_gpr[:, 2], "--", label="z mr-gpr")
+    plt.plot(t, pos_gpr_small[:, 0], "--", label="x mr-gpr 200")
+    plt.plot(t, pos_gpr_small[:, 1], "--", label="y mr-gpr 200")
+    plt.plot(t, pos_gpr_small[:, 2], "--", label="z mr-gpr 200")
+    plt.plot(t, pos_gpr_big[:, 0], ":", label="x mr-gpr 1000")
+    plt.plot(t, pos_gpr_big[:, 1], ":", label="y mr-gpr 1000")
+    plt.plot(t, pos_gpr_big[:, 2], ":", label="z mr-gpr 1000")
     plt.xlabel("Time [s]")
     plt.ylabel("Position [m]")
     plt.legend()
@@ -491,8 +508,10 @@ if __name__ == "__main__":
     ax.plot(x_refs[:, 0], x_refs[:, 1], x_refs[:, 2], "k--", label="reference")
     line_ideal, = ax.plot([], [], [], "b", label="ideal")
     point_ideal, = ax.plot([], [], [], "bo")
-    line_gpr, = ax.plot([], [], [], "r", label="mr-gpr")
-    point_gpr, = ax.plot([], [], [], "ro")
+    line_gpr_small, = ax.plot([], [], [], "r", label="mr-gpr 200")
+    point_gpr_small, = ax.plot([], [], [], "ro")
+    line_gpr_big, = ax.plot([], [], [], "g", label="mr-gpr 1000")
+    point_gpr_big, = ax.plot([], [], [], "go")
     ax.set_xlim(0, 1.2)
     ax.set_ylim(0, 1.2)
     ax.set_zlim(0, 1.2)
@@ -506,11 +525,22 @@ if __name__ == "__main__":
         line_ideal.set_3d_properties(pos_ideal[: i + 1, 2])
         point_ideal.set_data([pos_ideal[i, 0]], [pos_ideal[i, 1]])
         point_ideal.set_3d_properties([pos_ideal[i, 2]])
-        line_gpr.set_data(pos_gpr[: i + 1, 0], pos_gpr[: i + 1, 1])
-        line_gpr.set_3d_properties(pos_gpr[: i + 1, 2])
-        point_gpr.set_data([pos_gpr[i, 0]], [pos_gpr[i, 1]])
-        point_gpr.set_3d_properties([pos_gpr[i, 2]])
-        return line_ideal, point_ideal, line_gpr, point_gpr
+        line_gpr_small.set_data(pos_gpr_small[: i + 1, 0], pos_gpr_small[: i + 1, 1])
+        line_gpr_small.set_3d_properties(pos_gpr_small[: i + 1, 2])
+        point_gpr_small.set_data([pos_gpr_small[i, 0]], [pos_gpr_small[i, 1]])
+        point_gpr_small.set_3d_properties([pos_gpr_small[i, 2]])
+        line_gpr_big.set_data(pos_gpr_big[: i + 1, 0], pos_gpr_big[: i + 1, 1])
+        line_gpr_big.set_3d_properties(pos_gpr_big[: i + 1, 2])
+        point_gpr_big.set_data([pos_gpr_big[i, 0]], [pos_gpr_big[i, 1]])
+        point_gpr_big.set_3d_properties([pos_gpr_big[i, 2]])
+        return (
+            line_ideal,
+            point_ideal,
+            line_gpr_small,
+            point_gpr_small,
+            line_gpr_big,
+            point_gpr_big,
+        )
 
     ani = animation.FuncAnimation(
         fig, update, frames=len(pos_ideal), interval=20, blit=True
@@ -526,9 +556,12 @@ if __name__ == "__main__":
         R_ref_i,
         c_i,
         off_i,
-        p_g,
-        f_g,
-        e_g,
+        p_gs,
+        f_gs,
+        e_gs,
+        p_gb,
+        f_gb,
+        e_gb,
     ) in enumerate(
         zip(
             pos_ideal[:5],
@@ -539,12 +572,16 @@ if __name__ == "__main__":
             R_refs_ideal[:5],
             conds_ideal[:5],
             off_diags_ideal[:5],
-            pos_gpr[:5],
-            forces_gpr[:5],
-            err_gpr[:5],
+            pos_gpr_small[:5],
+            forces_gpr_small[:5],
+            err_gpr_small[:5],
+            pos_gpr_big[:5],
+            forces_gpr_big[:5],
+            err_gpr_big[:5],
         )
     ):
         print(
             f"Step {i}: ideal pos={p_i}, forces={f_i}, angle_error={e_i}; "
-            f"mr-gpr pos={p_g}, forces={f_g}, angle_error={e_g}"
+            f"mr-gpr-200 pos={p_gs}, forces={f_gs}, angle_error={e_gs}; "
+            f"mr-gpr-1000 pos={p_gb}, forces={f_gb}, angle_error={e_gb}"
         )
