@@ -1,6 +1,11 @@
 import numpy as np
 from typing import Tuple
-from simulation import Quadrotor, simulate, so3_log
+from simulation import (
+    Quadrotor,
+    simulate,
+    so3_log,
+    generate_structured_trajectory,
+)
 
 
 def _logR(R: np.ndarray) -> np.ndarray:
@@ -34,27 +39,31 @@ def collect_fxfr_residual_data(
         )
 
         T = len(pos)
+        traj = list(
+            generate_structured_trajectory(
+                start=pos[0], goal=target, n_steps=T, dt=quad.dt
+            )
+        )
+
+        q_nom = Quadrotor()
+        q_nom.__dict__.update(
+            {k: v.copy() if hasattr(v, "copy") else v for k, v in quad.__dict__.items()}
+        )
+
         for t in range(3, T - 4):
             x_hist = pos[t - 3 : t + 1].reshape(-1)
             logR_tm1 = _logR(R_hist[t - 1])
             logR_t = _logR(R_hist[t])
             phi = np.concatenate([x_hist, logR_tm1, logR_t])
 
-            # Nominal future using current f_x and f_R
-            q_nom = Quadrotor()
             q_nom.x = pos[t].copy()
             q_nom.v = (pos[t] - pos[t - 1]) / q_nom.dt
             q_nom.R = R_hist[t].copy()
             q_nom.omega = _logR(R_hist[t - 1].T @ R_hist[t]) / q_nom.dt
-            q_nom.e_int = np.zeros(3)
-            q_nom.e_R_int = np.zeros(3)
 
-            x_ref_dummy = np.zeros(3)
-            v_ref_dummy = np.zeros(3)
-            a_ref_dummy = np.zeros(3)
-
-            x1, x2, x3, x4_nom, _ = q_nom.f_x(x_ref_dummy, v_ref_dummy, a_ref_dummy)
-            _, R2_nom = q_nom.f_R(a_cmd=np.zeros(3), yaw_ref=0.0)
+            x_ref_t, v_ref_t, a_ref_t = traj[t]
+            x1, x2, x3, x4_nom, a_cmd = q_nom.f_x(x_ref_t, v_ref_t, a_ref_t)
+            _, R2_nom = q_nom.f_R(a_cmd=a_cmd, yaw_ref=0.0)
 
             x_true_p4 = pos[t + 4]
             R_true_p2 = R_hist[t + 2]

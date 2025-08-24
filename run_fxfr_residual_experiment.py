@@ -17,7 +17,7 @@ def main(residual_data: str | None = None, abs_data: str | None = None) -> None:
         X_fr, Y_fr = data["X_fr"], data["Y_fr"]
     else:
         X_fx, Y_fx, X_fr, Y_fr = collect_fxfr_residual_data(
-            runs=30, steps=250, hold_steps=50
+            runs=10, steps=150, hold_steps=30
         )
     gp_fx = ResidualFxGP(input_dim=X_fx.shape[1])
     gp_fx.fit(X_fx, Y_fx)

@@ -23,8 +23,9 @@ class FxFrResidualQuad(Quadrotor):
         gp_fr: ResidualFrGP,
         trust_scale_fx: float = 1.0,
         trust_scale_fr: float = 1.0,
-        var_clip_fx: float = 5.0,
-        var_clip_fr: float = 5.0,
+        var_clip_fx: float = 1e6,
+        var_clip_fr: float = 1e6,
+        debug_residual: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -34,6 +35,7 @@ class FxFrResidualQuad(Quadrotor):
         self.trust_scale_fr = trust_scale_fr
         self.var_clip_fx = var_clip_fx
         self.var_clip_fr = var_clip_fr
+        self.debug_residual = debug_residual
         self._x_hist: list[np.ndarray] = []
         self._R_hist: list[np.ndarray] = []
 
@@ -68,11 +70,19 @@ class FxFrResidualQuad(Quadrotor):
         phi = self._phi()
         if phi is not None:
             mu_x, var_x = self.gp_fx.predict(phi.reshape(1, -1))
-            w_x = self.trust_scale_fx * (1.0 / (1.0 + var_x[0] / self.var_clip_fx))
+            w_x = self.trust_scale_fx * (
+                1.0 / (1.0 + var_x[0] / self.var_clip_fx)
+            )
+            if self.debug_residual:
+                print("||mu_x||", np.linalg.norm(mu_x[0]), "w_x", w_x)
             x4 = x4_nom + w_x * mu_x[0]
 
             mu_r, var_r = self.gp_fr.predict(phi.reshape(1, -1))
-            w_r = self.trust_scale_fr * (1.0 / (1.0 + var_r[0] / self.var_clip_fr))
+            w_r = self.trust_scale_fr * (
+                1.0 / (1.0 + var_r[0] / self.var_clip_fr)
+            )
+            if self.debug_residual:
+                print("||mu_r||", np.linalg.norm(mu_r[0]), "w_r", w_r)
             R2 = R2_nom @ exp_SO3(w_r * mu_r[0])
         else:
             x4 = x4_nom
