@@ -15,6 +15,9 @@ def main() -> None:
     p.add_argument("--data", type=str, default="artifacts/slots_td.npz")
     p.add_argument("--gp-y", type=str, default=None)
     p.add_argument("--gp-r", type=str, default=None)
+    p.add_argument("--report", action="store_true", help="pretty-print summary and failure reasons")
+    p.add_argument("--out-json", type=str, default="artifacts/residual_report.json")
+    p.add_argument("--out-csv", type=str, default="artifacts/residual_dims.csv", help="per-dimension RMSE/R2")
     args = p.parse_args()
 
     data = np.load(args.data)
@@ -76,12 +79,44 @@ def main() -> None:
         "corr_y": corr_y.tolist(),
         "corr_r": corr_r.tolist(),
     }
-    with open("artifacts/residual_report.json", "w") as fh:
+    with open(args.out_json, "w") as fh:
         json.dump(report, fh)
 
     pass_cond = (
         np.sum(r2_y > 0) >= 6 and r2_r.mean() > 0 and 0.7 <= calib_y <= 1.3 and 0.7 <= calib_r <= 1.3
     )
+    if args.report:
+        good_y = int(np.sum(r2_y > 0))
+        mean_r2r = float(np.mean(r2_r))
+        print("\n=== Residual Verification (summary) ===")
+        print(f"Δy RMSE={rmse_y:.3f}  Δξ2 RMSE={rmse_r:.3f}  Calib_y={calib_y:.3f}  Calib_r={calib_r:.3f}")
+        print(f"R2: Δy >0 dims = {good_y}/9,  mean Δξ2 R2 = {mean_r2r:.3f}")
+        if not pass_cond:
+            reasons = []
+            if good_y < 6:
+                reasons.append(f"Δy R2>0 dims {good_y} < 6")
+            if mean_r2r <= 0:
+                reasons.append(f"mean Δξ2 R2 {mean_r2r:.3f} ≤ 0")
+            if not (0.7 <= calib_y <= 1.3):
+                reasons.append(f"Calib_y {calib_y:.2f} not in [0.7,1.3]")
+            if not (0.7 <= calib_r <= 1.3):
+                reasons.append(f"Calib_r {calib_r:.2f} not in [0.7,1.3]")
+            if reasons:
+                print("Reasons:", "; ".join(reasons))
+
+    try:
+        import csv
+        rmse_y_dim = np.sqrt(np.mean((Yy_te - dy) ** 2, axis=0))
+        rmse_r_dim = np.sqrt(np.mean((Yr_te - dr) ** 2, axis=0))
+        with open(args.out_csv, "w", newline="") as cf:
+            w = csv.writer(cf)
+            w.writerow(["target", "rmse", "r2"])
+            for i in range(9):
+                w.writerow([f"dy[{i}]", float(rmse_y_dim[i]), float(r2_y[i])])
+            for i in range(3):
+                w.writerow([f"dr[{i}]", float(rmse_r_dim[i]), float(r2_r[i])])
+    except Exception as e:
+        print(f"[WARN] failed to write per-dim CSV: {e}")
     if pass_cond:
         print("TEST PASS")
     else:

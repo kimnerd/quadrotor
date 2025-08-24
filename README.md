@@ -112,3 +112,54 @@ python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
   --val-split 0.2 --seed 0 --fast --subsample 800
 ```
 
+### Semi-fast training & conservative MR-GPR evaluation
+
+```bash
+python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
+  --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
+  --val-split 0.2 --seed 0 --isotropic --restarts 1 --optimizer fmin_l_bfgs_b --strict
+
+python scripts/04_eval_mrgpr_slots.py \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --episodes 8 --steps 220 --hold 350 \
+  --trust-y 0.35 --trust-r 0.25 --clip-y 0.3 --clip-r 0.1 \
+  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
+```
+
+### Checking results (reports)
+
+After training:
+```bash
+cat artifacts/gp_report.json | python - <<'PY'
+import sys,json; r=json.load(sys.stdin)
+print("VAL Δy RMSE=%.3f  Δξ2 RMSE=%.3f  Calib_y=%.3f  Calib_r=%.3f" % (r["rmse_y"], r["rmse_r"], r["calib_y"], r["calib_r"]))
+PY
+```
+
+Residual verification (pretty summary + artifacts):
+```bash
+python scripts/03_verify_residuals.py \
+  --data artifacts/slots_td.npz \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --report \
+  --out-json artifacts/residual_report.json \
+  --out-csv artifacts/residual_dims.csv
+```
+Artifacts:
+- `artifacts/residual_report.json` — global metrics (RMSE/R2/calibration/correlations)
+- `artifacts/residual_dims.csv` — per-dimension RMSE & R²
+
+Evaluation (pretty summary + per-episode CSV):
+```bash
+python scripts/04_eval_mrgpr_slots.py \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --episodes 8 --steps 220 --hold 350 \
+  --trust-y 0.35 --trust-r 0.25 --clip-y 0.3 --clip-r 0.1 \
+  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
+```
+Artifacts:
+- `artifacts/eval_metrics.json` — baseline vs MR-GPR averages
+- `artifacts/eval_episode_metrics.csv` — per-episode metrics table
+
+If evaluation fails, the script prints **reasons** (e.g., insufficient RMS improvement, increased saturation or conditioning violations) to guide parameter tuning.
+
