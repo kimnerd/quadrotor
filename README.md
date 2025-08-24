@@ -117,12 +117,12 @@ python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
 ```bash
 python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
   --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
-  --val-split 0.2 --seed 0 --isotropic --restarts 1 --optimizer fmin_l_bfgs_b --strict
+  --val-split 0.2 --seed 0 --restarts 3 --optimizer fmin_l_bfgs_b --calibrate --strict
 
 python scripts/04_eval_mrgpr_slots.py \
   --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
   --episodes 8 --steps 220 --hold 350 \
-  --trust-y 0.35 --trust-r 0.25 --clip-y 0.3 --clip-r 0.1 \
+  --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
   --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
 ```
 
@@ -154,7 +154,7 @@ Evaluation (pretty summary + per-episode CSV):
 python scripts/04_eval_mrgpr_slots.py \
   --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
   --episodes 8 --steps 220 --hold 350 \
-  --trust-y 0.35 --trust-r 0.25 --clip-y 0.3 --clip-r 0.1 \
+  --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
   --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
 ```
 Artifacts:
@@ -162,4 +162,18 @@ Artifacts:
 - `artifacts/eval_episode_metrics.csv` — per-episode metrics table
 
 If evaluation fails, the script prints **reasons** (e.g., insufficient RMS improvement, increased saturation or conditioning violations) to guide parameter tuning.
+
+# Ablation (which correction helps?)
+python scripts/04_eval_mrgpr_slots.py ... --no-r   # Δy only
+python scripts/04_eval_mrgpr_slots.py ... --no-y   # Δξ2 only
+
+# Quick sweep for trust/clip (bash)
+for TY in 0.4 0.6 0.8; do
+  for CY in 0.3 0.6 1.0; do
+    python scripts/04_eval_mrgpr_slots.py \
+      --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+      --episodes 8 --steps 220 --hold 350 \
+      --trust-y $TY --trust-r 0.35 --clip-y $CY --clip-r 0.3 --report || true
+  done
+done
 

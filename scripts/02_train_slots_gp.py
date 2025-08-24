@@ -29,6 +29,14 @@ def main() -> None:
     p.add_argument("--noise-cap", type=float, default=1e-2)
     p.add_argument("--subsample", type=int, default=0, help="randomly subsample N training points (0=all)")
     p.add_argument("--strict", action="store_true", help="fail run on poor RMSE")
+    p.add_argument("--calibrate", action="store_true", help="temperature-scale predictive std on validation set")
+    p.add_argument(
+        "--calib-agg",
+        type=str,
+        default="median",
+        choices=["median", "mean"],
+        help="aggregation for |err|/std during calibration",
+    )
     args = p.parse_args()
 
     data = np.load(args.data)
@@ -98,6 +106,10 @@ def main() -> None:
             gp_y.fit(Xy_tr, Yy_tr)
             gp_r.fit(Xr_tr, Yr_tr)
 
+    if args.calibrate:
+        gp_y.calibrate(Xy_val, Yy_val, agg=args.calib_agg)
+        gp_r.calibrate(Xr_val, Yr_val, agg=args.calib_agg)
+
     dy_val, vy_val = gp_y.predict(Xy_val)
     dr_val, vr_val = gp_r.predict(Xr_val)
 
@@ -126,6 +138,8 @@ def main() -> None:
         "calib_r": calib_r,
         "kernel_y": [str(m.kernel_) for m in gp_y.models],
         "kernel_r": [str(m.kernel_) for m in gp_r.models],
+        "temp_y": gp_y.temp.tolist(),
+        "temp_r": gp_r.temp.tolist(),
     }
     with open("artifacts/gp_report.json", "w") as fh:
         json.dump(report, fh)
