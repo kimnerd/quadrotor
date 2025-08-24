@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple
 from simulation import simulate, so3_log, generate_structured_trajectory
-from plants_ab import RealQuadrotor
+from controller_D_slot_corrected import SlotCorrectedController
 from controller_C_nominal import NominalInverseController
 
 
@@ -23,20 +23,17 @@ def collect_slots_residual_data(
     X_fx, Y_fx, X_fr, Y_fr = [], [], [], []
 
     for _ in range(runs):
-        plantB = RealQuadrotor()
+        # Simulate Real plant with nominal inverse controller (C-on-B)
+        plantB = SlotCorrectedController(gp_fx=None, gp_fr=None)
         target = rng.uniform(0.6, 1.2, size=3)
         pos, _, _, R_hist, _, _, _, _ = simulate(
             steps, target=target, hold_steps=hold_steps, quad=plantB
         )
         T = len(pos)
+        # generate identical reference trajectory for slot creation
         traj = list(
-            generate_structured_trajectory(start=pos[0], goal=target, n_steps=steps, dt=plantB.dt)
+            generate_structured_trajectory(start=pos[0], goal=target, n_steps=T, dt=plantB.dt)
         )
-        if traj:
-            last = traj[-1]
-        else:
-            last = (target, np.zeros(3), np.zeros(3))
-        traj.extend([last] * hold_steps)
 
         ctrlC = NominalInverseController()
         for t in range(3, T - 4):
@@ -45,16 +42,18 @@ def collect_slots_residual_data(
             logR_t = _logR(R_hist[t])
             phi = np.concatenate([x_hist, logR_tm1, logR_t])
 
-            x_ref_t, v_ref_t, a_ref_t = traj[t]
+            # sync state without resetting integrators
             ctrlC.sync_state(
                 x=pos[t],
                 v=(pos[t] - pos[t - 1]) / plantB.dt,
                 R=R_hist[t],
                 omega=_logR(R_hist[t - 1].T @ R_hist[t]) / plantB.dt,
             )
-            x1, x2, x3, x4_nom, R1, R2_nom, a_cmd = ctrlC.rollout_nominal_slots(
+            x_ref_t, v_ref_t, a_ref_t = traj[t]
+            x1, x2, x3, x4_nom, a_cmd = ctrlC.quad.f_x(
                 x_ref_t, v_ref_t, a_ref_t
             )
+            _, R2_nom = ctrlC.quad.f_R(a_cmd=a_cmd, yaw_ref=0.0)
 
             dx4 = pos[t + 4] - x4_nom
             dxi2 = _logR(R2_nom.T @ R_hist[t + 2])
@@ -64,4 +63,13 @@ def collect_slots_residual_data(
             X_fr.append(phi)
             Y_fr.append(dxi2)
 
-    return np.array(X_fx), np.array(Y_fx), np.array(X_fr), np.array(Y_fr)
+    # convert to arrays and verify residual magnitudes
+    X_fx, Y_fx = np.array(X_fx), np.array(Y_fx)
+    X_fr, Y_fr = np.array(X_fr), np.array(Y_fr)
+    mean_dx4 = float(np.mean(np.linalg.norm(Y_fx, axis=1))) if len(Y_fx) else 0.0
+    mean_dxi = float(np.mean(np.linalg.norm(Y_fr, axis=1))) if len(Y_fr) else 0.0
+    assert mean_dx4 > 1e-4 or mean_dxi > 1e-4, (
+        f"Residuals too small (Δx4̄={mean_dx4:.2e}, Δξ2̄={mean_dxi:.2e}); "
+        "check A≠B mismatch and alignment."
+    )
+    return X_fx, Y_fx, X_fr, Y_fr

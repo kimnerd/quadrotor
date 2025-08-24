@@ -66,6 +66,13 @@ def main() -> None:
 
     if args.use_real_plant:
         quad_base = SlotCorrectedController(gp_fx=None, gp_fr=None)
+        print(
+            "RealPlant:",
+            "m=", quad_base.m,
+            "I=", np.diag(quad_base.I),
+            "k_v=", quad_base.k_v,
+            "wind=", quad_base.wind,
+        )
         pos_base, *_ = simulate(
             args.sim_steps, hold_steps=args.sim_hold, quad=quad_base
         )
