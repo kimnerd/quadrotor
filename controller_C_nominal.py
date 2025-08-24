@@ -16,6 +16,7 @@ class NominalInverseController:
         self.quad = NominalQuadrotor()
         self._last_x1: np.ndarray | None = None
         self._last_a_cmd: np.ndarray | None = None
+        self._last_yaw_ref: float = 0.0
 
     def sync_state(
         self, x: np.ndarray, v: np.ndarray, R: np.ndarray, omega: np.ndarray
@@ -36,6 +37,7 @@ class NominalInverseController:
         R1, R2 = self.quad.f_R(a_cmd, yaw_ref)
         self._last_x1 = x1
         self._last_a_cmd = a_cmd
+        self._last_yaw_ref = yaw_ref
         return x1, x2, x3, x4, R1, R2, a_cmd
 
     def block_inverse(
@@ -84,7 +86,7 @@ class NominalInverseController:
             T = float(
                 np.clip((self.quad.m * a_cmd - g) @ (self.quad.R @ ez), 0.0, 4.0 * self.quad.max_force)
             )
-            R_ref = orientation_from_accel(a_cmd, 0.0, self.quad.m, self.quad.g)
+            R_ref = orientation_from_accel(a_cmd, self._last_yaw_ref, self.quad.m, self.quad.g)
             xi = so3_log(self.quad.R.T @ R_ref)
             self.quad.e_R_int = self.quad.leak_R * self.quad.e_R_int + self.quad.dt * xi
             self.quad.e_R_int = np.clip(self.quad.e_R_int, -1.0, 1.0)

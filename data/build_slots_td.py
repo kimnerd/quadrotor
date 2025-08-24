@@ -84,10 +84,11 @@ def build_slots_td(
             R_true_p2 = R_full[t + 2]
             xi2_true = so3_log(R1.T @ R_true_p2)
             dxi2 = so3_log(R2_nom.T @ R_true_p2)
+            xi2_nom = so3_log(R1.T @ R2_nom)
 
-            X_y.append(np.concatenate([z1, y_true]))
+            X_y.append(np.concatenate([z1, y_nom]))
             Y_y.append(dy)
-            X_r.append(np.concatenate([z1, xi2_true]))
+            X_r.append(np.concatenate([z1, xi2_nom]))
             Y_r.append(dxi2)
 
     X_y_arr = np.array(X_y)
@@ -117,11 +118,30 @@ def main() -> None:
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     mean_dy = float(np.mean(np.linalg.norm(Y_y, axis=1)))
     mean_dxi = float(np.mean(np.linalg.norm(Y_r, axis=1)))
+    y_part = X_y[:, -9:]
+    y_nom_all = y_part
+    y_true_all = y_part + Y_y
+    sig_nom = float(np.mean(np.linalg.norm(y_part - y_nom_all, axis=1)))
+    sig_true = float(np.mean(np.linalg.norm(y_part - y_true_all, axis=1)))
     with stats_path.open("w") as fh:
-        fh.write(json.dumps({"mean_dy": mean_dy, "mean_dxi2": mean_dxi}))
+        fh.write(
+            json.dumps(
+                {
+                    "mean_dy": mean_dy,
+                    "mean_dxi2": mean_dxi,
+                    "sig_nom": sig_nom,
+                    "sig_true": sig_true,
+                }
+            )
+        )
 
-    print(f"[TD] X_y:{X_y.shape} Y_y:{Y_y.shape} X_r:{X_r.shape} Y_r:{Y_r.shape}")
-    print(f"[TD] mean||Δy||={mean_dy:.3f}, mean||Δxi2||={mean_dxi:.3f}")
+    print(
+        f"[TD] X_y:{X_y.shape} Y_y:{Y_y.shape} X_r:{X_r.shape} Y_r:{Y_r.shape}"
+    )
+    print(
+        f"[TD] mean||Δy||={mean_dy:.3f}, mean||Δxi2||={mean_dxi:.3f}"
+    )
+    print(f"[TD] sig_nom={sig_nom:.3e}, sig_true={sig_true:.3e}")
 
 
 if __name__ == "__main__":
