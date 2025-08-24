@@ -74,3 +74,106 @@ The project uses `pytest` for testing (no tests are currently implemented). Run:
 pytest
 ```
 
+## Residual learning experiments
+
+Two experimental scripts explore Gaussian–process residual corrections:
+
+- `run_fxfr_residual_experiment.py` collects data and evaluates controllers
+  using only the nominal plant.  Because the plant matches the model exactly,
+  the learned residuals are typically near zero and results mirror the
+  baseline.
+- `run_experiment_slots_residual.py` separates the nominal model from a
+  mismatched real plant and applies GP‑based slot corrections during block
+  inverse control.  Use this script for experiments where residual learning
+  should affect performance.
+
+  Both scripts accept `--residual-data` and `--abs-data` arguments to load or
+  save `.npz` datasets so training data can be reused across runs.
+
+### Building slot-residual datasets
+
+For the MR-GPR slot controller, a moderate dataset improves stability.  A
+recommended starting point is:
+
+```bash
+python -m data.build_slots_td --runs 6 --steps 160 --hold 40 --seed 0 --out artifacts/slots_td.npz
+```
+
+The resulting `artifacts/slots_td.npz` can then be passed to
+`scripts/02_train_slots_gp.py` and the downstream verification/evaluation
+scripts.
+
+If training is compute-constrained, a fast mode disables hyperparameter
+restarts and uses an isotropic kernel. Subsampling further reduces cost:
+
+```bash
+python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
+  --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
+  --val-split 0.2 --seed 0 --fast --subsample 800
+```
+
+### Semi-fast training & conservative MR-GPR evaluation
+
+```bash
+python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
+  --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
+  --val-split 0.2 --seed 0 --restarts 3 --optimizer fmin_l_bfgs_b --calibrate --strict
+
+python scripts/04_eval_mrgpr_slots.py \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --episodes 8 --steps 220 --hold 350 \
+  --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
+  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
+```
+
+### Checking results (reports)
+
+After training:
+```bash
+cat artifacts/gp_report.json | python - <<'PY'
+import sys,json; r=json.load(sys.stdin)
+print("VAL Δy RMSE=%.3f  Δξ2 RMSE=%.3f  Calib_y=%.3f  Calib_r=%.3f" % (r["rmse_y"], r["rmse_r"], r["calib_y"], r["calib_r"]))
+PY
+```
+
+Residual verification (pretty summary + artifacts):
+```bash
+python scripts/03_verify_residuals.py \
+  --data artifacts/slots_td.npz \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --report \
+  --out-json artifacts/residual_report.json \
+  --out-csv artifacts/residual_dims.csv
+```
+Artifacts:
+- `artifacts/residual_report.json` — global metrics (RMSE/R2/calibration/correlations)
+- `artifacts/residual_dims.csv` — per-dimension RMSE & R²
+
+Evaluation (pretty summary + per-episode CSV):
+```bash
+python scripts/04_eval_mrgpr_slots.py \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --episodes 8 --steps 220 --hold 350 \
+  --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
+  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
+```
+Artifacts:
+- `artifacts/eval_metrics.json` — baseline vs MR-GPR averages
+- `artifacts/eval_episode_metrics.csv` — per-episode metrics table
+
+If evaluation fails, the script prints **reasons** (e.g., insufficient RMS improvement, increased saturation or conditioning violations) to guide parameter tuning.
+
+# Ablation (which correction helps?)
+python scripts/04_eval_mrgpr_slots.py ... --no-r   # Δy only
+python scripts/04_eval_mrgpr_slots.py ... --no-y   # Δξ2 only
+
+# Quick sweep for trust/clip (bash)
+for TY in 0.4 0.6 0.8; do
+  for CY in 0.3 0.6 1.0; do
+    python scripts/04_eval_mrgpr_slots.py \
+      --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+      --episodes 8 --steps 220 --hold 350 \
+      --trust-y $TY --trust-r 0.35 --clip-y $CY --clip-r 0.3 --report || true
+  done
+done
+
