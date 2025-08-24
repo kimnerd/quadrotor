@@ -103,3 +103,12 @@ The resulting `artifacts/slots_td.npz` can then be passed to
 `scripts/02_train_slots_gp.py` and the downstream verification/evaluation
 scripts.
 
+If training is compute-constrained, a fast mode disables hyperparameter
+restarts and uses an isotropic kernel. Subsampling further reduces cost:
+
+```bash
+python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
+  --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
+  --val-split 0.2 --seed 0 --fast --subsample 800
+```
+

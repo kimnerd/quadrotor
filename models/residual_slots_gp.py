@@ -9,25 +9,57 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 from sklearn.preprocessing import StandardScaler
+from typing import Optional
 
 
-def _make_gp(input_dim: int) -> GaussianProcessRegressor:
+def _make_gp(
+    input_dim: int,
+    *,
+    isotropic: bool = False,
+    noise_cap: float = 1e-2,
+    alpha: float = 1e-6,
+    restarts: int = 0,
+    optimizer: Optional[str] = "fmin_l_bfgs_b",
+) -> GaussianProcessRegressor:
+    """Factory for a basic RBF+White GP regressor."""
+    ls = 1.0 if isotropic else np.ones(input_dim)
+    ls_bounds = (1e-2, 1e2)
+    kernel = RBF(length_scale=ls, length_scale_bounds=ls_bounds) + \
+             WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-6, noise_cap))
     return GaussianProcessRegressor(
-        kernel=RBF(
-            length_scale=np.ones(input_dim), length_scale_bounds=(1e-2, 1e2)
-        )
-        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-6, 1e-2)),
-        alpha=1e-6,
+        kernel=kernel,
+        alpha=alpha,
         normalize_y=True,
-        n_restarts_optimizer=3,
+        n_restarts_optimizer=restarts,
+        optimizer=optimizer,
+        random_state=0,
     )
 
 
 class ResidualYSlotsGP:
     """Input ``X_y`` (39) -> Output Δy slots (9)."""
 
-    def __init__(self, input_dim: int = 39):
-        self.models = [_make_gp(input_dim) for _ in range(9)]
+    def __init__(
+        self,
+        input_dim: int = 39,
+        *,
+        isotropic: bool = False,
+        noise_cap: float = 1e-2,
+        alpha: float = 1e-6,
+        restarts: int = 0,
+        optimizer: Optional[str] = "fmin_l_bfgs_b",
+    ):
+        self.models = [
+            _make_gp(
+                input_dim,
+                isotropic=isotropic,
+                noise_cap=noise_cap,
+                alpha=alpha,
+                restarts=restarts,
+                optimizer=optimizer,
+            )
+            for _ in range(9)
+        ]
         self.scaler = StandardScaler()
 
     def fit(self, X: np.ndarray, Y: np.ndarray) -> None:
@@ -63,8 +95,27 @@ class ResidualYSlotsGP:
 class ResidualR2GP:
     """Input ``X_r`` (33) -> Output Δξ2 (3)."""
 
-    def __init__(self, input_dim: int = 33):
-        self.models = [_make_gp(input_dim) for _ in range(3)]
+    def __init__(
+        self,
+        input_dim: int = 33,
+        *,
+        isotropic: bool = False,
+        noise_cap: float = 1e-2,
+        alpha: float = 1e-6,
+        restarts: int = 0,
+        optimizer: Optional[str] = "fmin_l_bfgs_b",
+    ):
+        self.models = [
+            _make_gp(
+                input_dim,
+                isotropic=isotropic,
+                noise_cap=noise_cap,
+                alpha=alpha,
+                restarts=restarts,
+                optimizer=optimizer,
+            )
+            for _ in range(3)
+        ]
         self.scaler = StandardScaler()
 
     def fit(self, X: np.ndarray, Y: np.ndarray) -> None:
