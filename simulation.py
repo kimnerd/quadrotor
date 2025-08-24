@@ -51,6 +51,11 @@ def exp_SO3(omega: np.ndarray) -> np.ndarray:
     )
 
 
+def finite_diff_y(m: float, dt: float, g: np.ndarray, x_i: np.ndarray, x_ip1: np.ndarray, x_ip2: np.ndarray) -> np.ndarray:
+    """Compute slot target ``y`` using a second finite difference."""
+    assert x_i.shape == (3,) and x_ip1.shape == (3,) and x_ip2.shape == (3,)
+    return (m / (dt**2)) * (x_ip2 - 2.0 * x_ip1 + x_i) - g
+
 def orientation_from_accel(
     a_ref: np.ndarray,
     yaw_ref: float,
