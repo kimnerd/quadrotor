@@ -8,16 +8,14 @@ from mrgpr_fxfr_residual import ResidualFxGP, ResidualFrGP
 from controller_fxfr_residual import FxFrResidualQuad
 
 
-def main(
-    residual_data: str | None = None,
-    abs_data: str | None = None,
-    res_runs: int = 5,
-    res_steps: int = 150,
-    res_hold: int = 30,
-    abs_steps: int = 100,
-    sim_steps: int = 200,
-    sim_hold: int = 400,
-) -> None:
+def main(residual_data: str | None = None, abs_data: str | None = None) -> None:
+    # Fixed experiment parameters to simplify CLI
+    res_runs = 100
+    res_steps = 20
+    res_hold = 0
+    abs_steps = 200
+    sim_steps = 60
+    sim_hold = 0
     np.random.seed(0)
 
     if residual_data:
@@ -66,22 +64,11 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Fx/Fr residual GP experiment")
-    parser.add_argument("--residual-data", type=str, default=None, help="npz file with X_fx,Y_fx,X_fr,Y_fr")
-    parser.add_argument("--abs-data", type=str, default=None, help="npz file with X_abs,y_abs")
-    parser.add_argument("--res-runs", type=int, default=5, help="residual data runs")
-    parser.add_argument("--res-steps", type=int, default=150, help="residual data steps per run")
-    parser.add_argument("--res-hold", type=int, default=30, help="residual data hold steps")
-    parser.add_argument("--abs-steps", type=int, default=100, help="absolute rotor data steps")
-    parser.add_argument("--sim-steps", type=int, default=200, help="simulation steps for evaluation")
-    parser.add_argument("--sim-hold", type=int, default=400, help="hold steps for evaluation")
-    args = parser.parse_args()
-    main(
-        residual_data=args.residual_data,
-        abs_data=args.abs_data,
-        res_runs=args.res_runs,
-        res_steps=args.res_steps,
-        res_hold=args.res_hold,
-        abs_steps=args.abs_steps,
-        sim_steps=args.sim_steps,
-        sim_hold=args.sim_hold,
+    parser.add_argument(
+        "--residual-data", type=str, default=None, help="npz file with X_fx,Y_fx,X_fr,Y_fr"
     )
+    parser.add_argument(
+        "--abs-data", type=str, default=None, help="npz file with X_abs,y_abs"
+    )
+    args = parser.parse_args()
+    main(residual_data=args.residual_data, abs_data=args.abs_data)

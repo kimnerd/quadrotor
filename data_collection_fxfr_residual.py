@@ -13,9 +13,9 @@ def _logR(R: np.ndarray) -> np.ndarray:
 
 
 def collect_fxfr_residual_data(
-    runs: int = 20,
-    steps: int = 250,
-    hold_steps: int = 50,
+    runs: int = 100,
+    steps: int = 20,
+    hold_steps: int = 0,
     seed: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
