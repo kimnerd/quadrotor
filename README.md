@@ -87,6 +87,19 @@ Two experimental scripts explore Gaussian–process residual corrections:
   inverse control.  Use this script for experiments where residual learning
   should affect performance.
 
-Both scripts accept `--residual-data` and `--abs-data` arguments to load or
-save `.npz` datasets so training data can be reused across runs.
+  Both scripts accept `--residual-data` and `--abs-data` arguments to load or
+  save `.npz` datasets so training data can be reused across runs.
+
+### Building slot-residual datasets
+
+For the MR-GPR slot controller, a moderate dataset improves stability.  A
+recommended starting point is:
+
+```bash
+python -m data.build_slots_td --runs 6 --steps 160 --hold 40 --seed 0 --out artifacts/slots_td.npz
+```
+
+The resulting `artifacts/slots_td.npz` can then be passed to
+`scripts/02_train_slots_gp.py` and the downstream verification/evaluation
+scripts.
 

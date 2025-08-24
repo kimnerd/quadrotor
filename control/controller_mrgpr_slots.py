@@ -35,6 +35,8 @@ class MRGPBlockController(RealQuadrotor):
         self.u_hist: list[np.ndarray] = []
         self.u_log: list[np.ndarray] = []
         self.last_u: np.ndarray | None = None
+        self.debug = bool(kwargs.pop("debug", False))
+        self.applied_stats = {"dy_norm": [], "wy_norm": [], "wr_norm": [], "dxi_norm": []}
 
     def _zeta1(self) -> np.ndarray | None:
         if len(self.x_hist) < 4 or len(self.R_hist) < 2 or len(self.u_hist) < 3:
@@ -95,6 +97,20 @@ class MRGPBlockController(RealQuadrotor):
             T, M, condA, off_diag = self.ctrl.block_inverse(
                 x2, x3, x4_nom, R1, R2, Y_override=Y_override
             )
+            self.applied_stats["dy_norm"].append(float(np.linalg.norm(dy[0])))
+            self.applied_stats["wy_norm"].append(float(np.linalg.norm(wy)))
+            self.applied_stats["dxi_norm"].append(float(np.linalg.norm(dxi[0])))
+            self.applied_stats["wr_norm"].append(float(np.linalg.norm(wr)))
+            if self.debug and len(self.applied_stats["dy_norm"]) % 50 == 0:
+                print(
+                    "[MRGP] mean||dy||=%.3e  mean||wy||=%.3e  mean||dxi||=%.3e  mean||wr||=%.3e"
+                    % (
+                        np.mean(self.applied_stats["dy_norm"]),
+                        np.mean(self.applied_stats["wy_norm"]),
+                        np.mean(self.applied_stats["dxi_norm"]),
+                        np.mean(self.applied_stats["wr_norm"]),
+                    )
+                )
 
         forces, T_act, M_act = self.rotor_forces(T, M)
 

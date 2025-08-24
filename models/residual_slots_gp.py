@@ -13,9 +13,13 @@ from sklearn.preprocessing import StandardScaler
 
 def _make_gp(input_dim: int) -> GaussianProcessRegressor:
     return GaussianProcessRegressor(
-        kernel=RBF(length_scale=np.ones(input_dim), length_scale_bounds=(1e-3, 1e3))
-        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-6, 1e1)),
+        kernel=RBF(
+            length_scale=np.ones(input_dim), length_scale_bounds=(1e-2, 1e2)
+        )
+        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-6, 1e-2)),
+        alpha=1e-6,
         normalize_y=True,
+        n_restarts_optimizer=3,
     )
 
 

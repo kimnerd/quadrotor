@@ -41,10 +41,30 @@ def main() -> None:
     rmse_r = float(np.sqrt(np.mean(err_r**2)))
     r2_y = r2_score(Yy_te, dy, multioutput="raw_values")
     r2_r = r2_score(Yr_te, dr, multioutput="raw_values")
-    calib_y = float(np.mean(np.abs(err_y / np.sqrt(vy))))
-    calib_r = float(np.mean(np.abs(err_r / np.sqrt(vr))))
-    corr_y = np.corrcoef(Yy_te.T, dy.T)[:9, 9:]
-    corr_r = np.corrcoef(Yr_te.T, dr.T)[:3, 3:]
+    calib_y = float(np.mean(np.abs(err_y / (np.sqrt(vy) + 1e-9))))
+    calib_r = float(np.mean(np.abs(err_r / (np.sqrt(vr) + 1e-9))))
+
+    def _safe_corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        a = np.asarray(a)
+        b = np.asarray(b)
+        out = np.zeros((a.shape[0], b.shape[0]))
+        for i in range(a.shape[0]):
+            for j in range(b.shape[0]):
+                ai = a[i]
+                bj = b[j]
+                sa = np.std(ai)
+                sb = np.std(bj)
+                if sa < 1e-12 or sb < 1e-12:
+                    out[i, j] = 0.0
+                else:
+                    c = np.corrcoef(ai, bj)[0, 1]
+                    if not np.isfinite(c):
+                        c = 0.0
+                    out[i, j] = c
+        return out
+
+    corr_y = _safe_corr(Yy_te.T, dy.T)
+    corr_r = _safe_corr(Yr_te.T, dr.T)
 
     report = {
         "rmse_y": rmse_y,
