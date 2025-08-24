@@ -1,5 +1,4 @@
 import argparse
-import argparse
 import numpy as np
 from simulation import simulate
 from data_collection import collect_random_rotor_data

@@ -1,3 +1,12 @@
+"""Legacy nominal-only residual experiment.
+
+This script gathers residual data and evaluates controllers using only the
+nominal :class:`Quadrotor`. Because the simulated plant matches the nominal
+model, learned residuals are usually near zero and the residual controller
+behaves like the baseline. For real-plant experiments use
+``run_experiment_slots_residual.py``.
+"""
+
 import argparse
 import numpy as np
 from simulation import Quadrotor, simulate

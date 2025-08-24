@@ -74,3 +74,19 @@ The project uses `pytest` for testing (no tests are currently implemented). Run:
 pytest
 ```
 
+## Residual learning experiments
+
+Two experimental scripts explore Gaussian–process residual corrections:
+
+- `run_fxfr_residual_experiment.py` collects data and evaluates controllers
+  using only the nominal plant.  Because the plant matches the model exactly,
+  the learned residuals are typically near zero and results mirror the
+  baseline.
+- `run_experiment_slots_residual.py` separates the nominal model from a
+  mismatched real plant and applies GP‑based slot corrections during block
+  inverse control.  Use this script for experiments where residual learning
+  should affect performance.
+
+Both scripts accept `--residual-data` and `--abs-data` arguments to load or
+save `.npz` datasets so training data can be reused across runs.
+

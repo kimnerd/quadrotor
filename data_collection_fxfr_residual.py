@@ -1,3 +1,11 @@
+"""Legacy nominal-only residual data collection.
+
+This script uses the nominal :class:`Quadrotor` for both simulation and
+reference generation. Because no plant mismatch is introduced, the resulting
+residual targets are typically near zero. For experiments with a real-plant
+mismatch, use :mod:`data_collection_slots_residual` instead.
+"""
+
 import numpy as np
 from typing import Tuple
 from simulation import (
