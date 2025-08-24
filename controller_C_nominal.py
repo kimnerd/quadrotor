@@ -45,17 +45,22 @@ class NominalInverseController:
         x4_slot: np.ndarray,
         R1: np.ndarray,
         R2_slot: np.ndarray,
+        Y_override: np.ndarray | None = None,
     ) -> Tuple[float, np.ndarray, float, float]:
         x1 = self._last_x1
         if x1 is None:
             raise RuntimeError("rollout_nominal_slots must be called before block_inverse")
         m, dt, g = self.quad.m, self.quad.dt, self.quad.g
-        y0 = m / (dt**2) * (x2 - 2 * x1 + self.quad.x) - g
-        y1 = m / (dt**2) * (x3 - 2 * x2 + x1) - g
-        y2 = m / (dt**2) * (x4_slot - 2 * x3 + x2) - g
         ez = np.array([0.0, 0.0, 1.0])
+        if Y_override is None:
+            y0 = m / (dt**2) * (x2 - 2 * x1 + self.quad.x) - g
+            y1 = m / (dt**2) * (x3 - 2 * x2 + x1) - g
+            y2 = m / (dt**2) * (x4_slot - 2 * x3 + x2) - g
+            Y = np.column_stack((y0, y1, y2))
+        else:
+            assert Y_override.shape == (3, 3)
+            Y = Y_override
         A = np.column_stack((self.quad.R @ ez, R1 @ ez, R2_slot @ ez))
-        Y = np.column_stack((y0, y1, y2))
         lam = self.quad.lam
         condA = float("inf")
         off_diag_norm = float("nan")

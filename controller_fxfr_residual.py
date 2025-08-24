@@ -1,3 +1,7 @@
+"""LEGACY path: directly correcting slot outcomes (Δx4/Δξ2).
+Paper-aligned controller is control/controller_mrgpr_slots.py using
+reference-side correction [ζ1; s] → s+μ → nominal inverse."""
+
 import numpy as np
 from typing import Tuple
 from simulation import (
@@ -38,6 +42,8 @@ class FxFrResidualQuad(Quadrotor):
         self.debug_residual = debug_residual
         self._x_hist: list[np.ndarray] = []
         self._R_hist: list[np.ndarray] = []
+        self.u_log: list[np.ndarray] = []
+        self.last_u: np.ndarray | None = None
 
     def _phi(self) -> np.ndarray | None:
         if len(self._x_hist) < 4 or len(self._R_hist) < 2:
@@ -144,6 +150,11 @@ class FxFrResidualQuad(Quadrotor):
             M_act = TM_act[1:]
         else:
             forces, T_act, M_act = self.rotor_forces(T, M)
+
+        self.last_u = np.concatenate(([T_act], M_act)).astype(float)
+        self.u_log.append(self.last_u.copy())
+        if len(self.u_log) > 20000:
+            self.u_log.pop(0)
 
         # Update translational dynamics with actual thrust
         self.x += dt * self.v
