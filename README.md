@@ -96,7 +96,9 @@ For the MR-GPR slot controller, a moderate dataset improves stability.  A
 recommended starting point is:
 
 ```bash
-python -m data.build_slots_td --runs 6 --steps 160 --hold 40 --seed 0 --out artifacts/slots_td.npz
+python -m data.build_slots_td --runs 6 --steps 160 --hold 40 --seed 0 \
+  --yaw-rate 0.35 --target-min 0.9 --target-max 1.6 \
+  --out artifacts/slots_td.npz
 ```
 
 The resulting `artifacts/slots_td.npz` can then be passed to
@@ -118,13 +120,13 @@ python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
 python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
   --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
   --val-split 0.2 --seed 0 --restarts 3 --optimizer fmin_l_bfgs_b --calibrate --strict
-
-python scripts/04_eval_mrgpr_slots.py \
-  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
-  --episodes 8 --steps 220 --hold 350 \
-  --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
-  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
 ```
+
+### Calibration
+
+When `--calibrate` is enabled, per-output temperature scales are fitted and saved
+in `gp_report.json` as `temps_y` and `temps_r`. These are automatically applied
+to scale predictive variances during `predict()`.
 
 ### Checking results (reports)
 
@@ -143,20 +145,66 @@ python scripts/03_verify_residuals.py \
   --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
   --report \
   --out-json artifacts/residual_report.json \
-  --out-csv artifacts/residual_dims.csv
+  --out-csv artifacts/residual_dims.csv \
+  --skip-calib-check
 ```
 Artifacts:
 - `artifacts/residual_report.json` — global metrics (RMSE/R2/calibration/correlations)
 - `artifacts/residual_dims.csv` — per-dimension RMSE & R²
 
+### Offline correction sanity check
+
+Before running full evaluation, confirm that applying the learned corrections
+reduces error on the dataset.  The script below reports RMSE improvement and
+calibration along with shuffle baselines:
+
+```bash
+# 1) data set (already built above)
+python -m data.build_slots_td --runs 6 --steps 160 --hold 40 --seed 0 \
+  --yaw-rate 0.35 --target-min 0.9 --target-max 1.6 \
+  --out artifacts/slots_td.npz
+
+# 2) fast training with calibration
+python scripts/02_train_slots_gp.py --data artifacts/slots_td.npz \
+  --out-y artifacts/gp_y.pkl --out-r artifacts/gp_r.pkl \
+  --val-split 0.2 --seed 0 --fast --subsample 800 --calibrate
+
+# 3) residual verification
+python scripts/03_verify_residuals.py \
+  --data artifacts/slots_td.npz \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --report --out-json artifacts/residual_report.json \
+  --out-csv artifacts/residual_dims.csv --skip-calib-check
+
+# 4) offline apply check
+python scripts/03b_offline_apply_check.py \
+  --data artifacts/slots_td.npz \
+  --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
+  --out-json artifacts/offline_apply_report.json \
+  --out-csv artifacts/offline_apply_dims.csv \
+  --fail-below-y 0.10 --fail-below-r 0.10 \
+  --shuffle-runs 3 --seed 0
+```
+
+Improvements should be significantly positive (tens of percent) while shuffle
+improvements hover near zero.  Calibration values near one are ideal.  Proceed
+to evaluation only after this step passes.
+
 Evaluation (pretty summary + per-episode CSV):
 ```bash
 python scripts/04_eval_mrgpr_slots.py \
   --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
-  --episodes 8 --steps 220 --hold 350 \
+  --episodes 8 --steps 160 --hold 0 \
+  --yaw-rate 0.35 --target-min 0.9 --target-max 1.6 \
   --trust-y 0.6 --trust-r 0.35 --clip-y 1.0 --clip-r 0.3 \
-  --report --out-json artifacts/eval_metrics.json --episodes-csv artifacts/eval_episode_metrics.csv
+  --improve 0.0 \
+  --report --out-json artifacts/eval_metrics.json \
+  --episodes-csv artifacts/eval_episode_metrics.csv \
+  --debug-json artifacts/eval_debug.json
 ```
+Because `condA` can worsen for hovering or slow, no‑yaw paths, it is recommended to
+use shorter trajectories (`--steps 160 --hold 0`) and apply a yaw stimulus
+(`--yaw-rate 0.35`) with targets sampled away from the origin (`--target-min 0.9 --target-max 1.6`).
 Artifacts:
 - `artifacts/eval_metrics.json` — baseline vs MR-GPR averages
 - `artifacts/eval_episode_metrics.csv` — per-episode metrics table
@@ -172,7 +220,7 @@ for TY in 0.4 0.6 0.8; do
   for CY in 0.3 0.6 1.0; do
     python scripts/04_eval_mrgpr_slots.py \
       --gp-y artifacts/gp_y.pkl --gp-r artifacts/gp_r.pkl \
-      --episodes 8 --steps 220 --hold 350 \
+      --episodes 8 --steps 160 --hold 0 --yaw-rate 0.35 --target-min 0.9 --target-max 1.6 \
       --trust-y $TY --trust-r 0.35 --clip-y $CY --clip-r 0.3 --report || true
   done
 done

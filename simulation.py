@@ -342,6 +342,7 @@ def simulate(
     steps: int = 100,
     target: np.ndarray | None = None,
     hold_steps: int = 0,
+    omega_refs: list[np.ndarray] | None = None,
     quad: Quadrotor | None = None,
 ):
     """Run the quadrotor simulation and optionally hold at the goal."""
@@ -367,9 +368,14 @@ def simulate(
         [],
         [],
     )
+    yaw_ref = 0.0
     for k in range(len(traj)):
         x_ref, v_ref, a_ref = traj[k]
-        f, R, x_r, R_ref, err, condA, offD = quad.step(x_ref, v_ref, a_ref)
+        if omega_refs is not None and k < len(omega_refs):
+            yaw_ref += float(omega_refs[k][2]) * quad.dt
+        f, R, x_r, R_ref, err, condA, offD = quad.step(
+            x_ref, v_ref, a_ref, yaw_ref=yaw_ref
+        )
         positions.append(quad.x.copy())
         forces.append(f)
         R_hist.append(R)

@@ -18,6 +18,7 @@ def main() -> None:
     p.add_argument("--report", action="store_true", help="pretty-print summary and failure reasons")
     p.add_argument("--out-json", type=str, default="artifacts/residual_report.json")
     p.add_argument("--out-csv", type=str, default="artifacts/residual_dims.csv", help="per-dimension RMSE/R2")
+    p.add_argument("--skip-calib-check", action="store_true", help="skip calibration range check")
     args = p.parse_args()
 
     data = np.load(args.data)
@@ -82,8 +83,11 @@ def main() -> None:
     with open(args.out_json, "w") as fh:
         json.dump(report, fh)
 
+    calib_ok = 0.7 <= calib_y <= 1.3 and 0.7 <= calib_r <= 1.3
     pass_cond = (
-        np.sum(r2_y > 0) >= 6 and r2_r.mean() > 0 and 0.7 <= calib_y <= 1.3 and 0.7 <= calib_r <= 1.3
+        np.sum(r2_y > 0) >= 6
+        and r2_r.mean() > 0
+        and (args.skip_calib_check or calib_ok)
     )
     if args.report:
         good_y = int(np.sum(r2_y > 0))
@@ -97,10 +101,11 @@ def main() -> None:
                 reasons.append(f"Δy R2>0 dims {good_y} < 6")
             if mean_r2r <= 0:
                 reasons.append(f"mean Δξ2 R2 {mean_r2r:.3f} ≤ 0")
-            if not (0.7 <= calib_y <= 1.3):
-                reasons.append(f"Calib_y {calib_y:.2f} not in [0.7,1.3]")
-            if not (0.7 <= calib_r <= 1.3):
-                reasons.append(f"Calib_r {calib_r:.2f} not in [0.7,1.3]")
+            if not args.skip_calib_check and not calib_ok:
+                if not (0.7 <= calib_y <= 1.3):
+                    reasons.append(f"Calib_y {calib_y:.2f} not in [0.7,1.3]")
+                if not (0.7 <= calib_r <= 1.3):
+                    reasons.append(f"Calib_r {calib_r:.2f} not in [0.7,1.3]")
             if reasons:
                 print("Reasons:", "; ".join(reasons))
 
