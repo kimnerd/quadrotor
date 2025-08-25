@@ -63,14 +63,17 @@ class NominalInverseController:
             assert Y_override.shape == (3, 3)
             Y = Y_override
         A = np.column_stack((self.quad.R @ ez, R1 @ ez, R2_slot @ ez))
-        lam = self.quad.lam
-        condA = float("inf")
+        lam_base = self.quad.lam
+        condA = 1e12
         off_diag_norm = float("nan")
+        lam_min, lam_max = 1e-4, 1e2
         try:
-            condA = np.linalg.cond(A)
-            if not np.isfinite(condA) or condA > 1e3:
-                raise np.linalg.LinAlgError
-            Ainv_damped = np.linalg.inv(A.T @ A + (lam**2) * np.eye(3)) @ A.T
+            condA = float(np.linalg.cond(A))
+            if not np.isfinite(condA):
+                condA = 1e12
+            scale = 1.0 + max(0.0, (condA - 1e2) / 1e2)
+            lam_eff = float(np.clip(lam_base * scale, lam_min, lam_max))
+            Ainv_damped = np.linalg.inv(A.T @ A + (lam_eff**2) * np.eye(3)) @ A.T
             D = Ainv_damped @ Y
             T0, T1, T2 = np.diag(D)
             T = float(np.clip(T0, 0.0, 4.0 * self.quad.max_force))

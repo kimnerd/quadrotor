@@ -27,6 +27,9 @@ def build_slots_td(
     steps: int = 250,
     hold_steps: int = 50,
     seed: int = 0,
+    yaw_rate: float = 0.0,
+    target_min: float = 0.6,
+    target_max: float = 1.2,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     X_y: list[np.ndarray] = []
@@ -36,9 +39,14 @@ def build_slots_td(
 
     for _ in range(runs):
         quad = SlotCorrectedController(gp_fx=None, gp_fr=None)
-        target = rng.uniform(0.6, 1.2, size=3)
+        target = rng.uniform(target_min, target_max, size=3)
+        omega_refs = [np.array([0.0, 0.0, yaw_rate])] * steps
         pos, _, _, R_hist, _, _, _, _ = simulate(
-            steps, target=target, hold_steps=hold_steps, quad=quad
+            steps,
+            target=target,
+            hold_steps=hold_steps,
+            omega_refs=omega_refs,
+            quad=quad,
         )
         u_arr = np.array(quad.u_log)
         x_full = np.vstack([np.zeros(3), pos])
@@ -104,11 +112,20 @@ def main() -> None:
     p.add_argument("--steps", type=int, default=250)
     p.add_argument("--hold", type=int, default=50)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--yaw-rate", type=float, default=0.0)
+    p.add_argument("--target-min", type=float, default=0.6)
+    p.add_argument("--target-max", type=float, default=1.2)
     p.add_argument("--out", type=str, default="artifacts/slots_td.npz")
     args = p.parse_args()
 
     X_y, Y_y, X_r, Y_r = build_slots_td(
-        runs=args.runs, steps=args.steps, hold_steps=args.hold, seed=args.seed
+        runs=args.runs,
+        steps=args.steps,
+        hold_steps=args.hold,
+        seed=args.seed,
+        yaw_rate=args.yaw_rate,
+        target_min=args.target_min,
+        target_max=args.target_max,
     )
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

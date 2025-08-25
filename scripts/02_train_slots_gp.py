@@ -138,8 +138,8 @@ def main() -> None:
         "calib_r": calib_r,
         "kernel_y": [str(m.kernel_) for m in gp_y.models],
         "kernel_r": [str(m.kernel_) for m in gp_r.models],
-        "temp_y": gp_y.temp.tolist(),
-        "temp_r": gp_r.temp.tolist(),
+        "temps_y": gp_y.temp.tolist(),
+        "temps_r": gp_r.temp.tolist(),
     }
     with open("artifacts/gp_report.json", "w") as fh:
         json.dump(report, fh)
